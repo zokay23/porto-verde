@@ -1,13 +1,16 @@
 // Dossier builder for Porto Verde (make.fun gta6-01).
-// Runs with plain Node 22: `MAKEFUN_OUTPUT_DIR=out node main.ts`
-// Validates game/, screenshots/ and writes out/dossier.json (makefun/dossier/v1).
+// Plain Node 22, no dependencies: `MAKEFUN_OUTPUT_DIR=out node main.ts`
+// Validates game/ and screenshots/, copies them to the output dir and writes
+// out/dossier.json (makefun/dossier/v1) for the judge.
 import { copyFile, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
-const outDir = process.env.MAKEFUN_OUTPUT_DIR ? path.resolve(process.env.MAKEFUN_OUTPUT_DIR) : path.join(root, 'out');
+const outDir = process.env.MAKEFUN_OUTPUT_DIR
+  ? path.resolve(process.env.MAKEFUN_OUTPUT_DIR)
+  : path.join(root, 'out');
 const gameDir = path.join(root, 'game');
 const shotDir = path.join(root, 'screenshots');
 
@@ -17,7 +20,9 @@ const TEXT_MAX_BYTES = 163840;
 const SHOT_MAX_BYTES = 262144;
 const SHOT_MAX_COUNT = 4;
 
-function sha256(buf) { return createHash('sha256').update(buf).digest('hex'); }
+function sha256(buf) {
+  return createHash('sha256').update(buf).digest('hex');
+}
 
 async function walk(dir, base) {
   const out = [];
@@ -34,7 +39,9 @@ async function main() {
   const errors = [];
   const gameFiles = await walk(gameDir, root);
   gameFiles.sort((a, b) => a.rel.localeCompare(b.rel));
-  if (gameFiles.length > GAME_MAX_FILES) errors.push(`too many game files: ${gameFiles.length} > ${GAME_MAX_FILES}`);
+  if (gameFiles.length > GAME_MAX_FILES) {
+    errors.push(`too many game files: ${gameFiles.length} > ${GAME_MAX_FILES}`);
+  }
   let totalBytes = 0;
   const files = [];
   for (const f of gameFiles) {
@@ -44,8 +51,8 @@ async function main() {
   }
   if (totalBytes > GAME_MAX_BYTES) errors.push(`game too big: ${totalBytes} > ${GAME_MAX_BYTES}`);
 
-  // Source text cap counts the code WE wrote, not the vendored third-party
-  // library: game/vendor/three.*.js is the three.js distribution, excluded.
+  // The source-text cap counts the code we wrote, not the vendored library:
+  // game/vendor/three.*.js is the three.js distribution, excluded.
   let textBytes = 0;
   for (const f of files) {
     if (f.path.startsWith('game/vendor/')) continue;
@@ -60,7 +67,9 @@ async function main() {
 
   // Screenshots: 3-4 real renders, each under the cap.
   const shotNames = (await readdir(shotDir)).filter((n) => /\.(jpg|jpeg|png)$/i.test(n)).sort();
-  if (shotNames.length < 3 || shotNames.length > SHOT_MAX_COUNT) errors.push(`screenshots: need 3-4, found ${shotNames.length}`);
+  if (shotNames.length < 3 || shotNames.length > SHOT_MAX_COUNT) {
+    errors.push(`screenshots: need 3-4, found ${shotNames.length}`);
+  }
   const screenshots = [];
   for (const name of shotNames) {
     const buf = await readFile(path.join(shotDir, name));
@@ -90,8 +99,17 @@ async function main() {
     errors,
   };
   await writeFile(path.join(outDir, 'dossier.json'), JSON.stringify(dossier, null, 2) + '\n');
-  console.log(JSON.stringify({ files: files.length, game_total_bytes: totalBytes, text_total_bytes: textBytes, screenshots: screenshots.length, errors }, null, 2));
+  console.log(JSON.stringify({
+    files: files.length,
+    game_total_bytes: totalBytes,
+    text_total_bytes: textBytes,
+    screenshots: screenshots.length,
+    errors,
+  }, null, 2));
   if (errors.length > 0) process.exitCode = 1;
 }
 
-main().catch((err) => { console.error(err); process.exit(1); });
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

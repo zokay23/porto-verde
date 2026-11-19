@@ -26,9 +26,17 @@ const server = http.createServer(async (req, res) => {
     let rel = decodeURIComponent(url.pathname);
     if (rel === '/') rel = '/index.html';
     const full = path.join(gameDir, rel);
-    if (!full.startsWith(gameDir)) { res.writeHead(403); res.end('forbidden'); return; }
+    if (!full.startsWith(gameDir)) {
+      res.writeHead(403);
+      res.end('forbidden');
+      return;
+    }
     const st = await stat(full);
-    if (!st.isFile()) { res.writeHead(404); res.end('not found'); return; }
+    if (!st.isFile()) {
+      res.writeHead(404);
+      res.end('not found');
+      return;
+    }
     res.writeHead(200, { 'content-type': MIME[path.extname(full)] || 'application/octet-stream' });
     createReadStream(full).pipe(res);
   } catch {
