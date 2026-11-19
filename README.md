@@ -1,89 +1,59 @@
 # Porto Verde
 
-An original open-world crime game for the make.fun **gta6-01** bounty — a complete
-rendition of the genre, built from scratch in a week: a drivable city, traffic and
-pedestrians, carjacking, a wanted system with police chases, five story missions,
-combat, a HUD with a live minimap, a save, and synthesized sound. It runs offline in
-a desktop browser from static files, with keyboard and mouse and no network requests.
+An open-world crime story — an original game made for the **make.fun GTA 6 bounty** (competition `gta6-01`). No Rockstar names, characters, maps or assets: this is a made-up city, a made-up crew, and a made-up debt.
 
-**Everything in it is original**: the city (Porto Verde), the characters (Dante "D"
-Marlow, the Marlin Club, the Verde PD), the vehicles, the story, the art and the sound.
-Not affiliated with Rockstar Games; no GTA names, logos, characters or maps are used.
-three.js (MIT) is vendored under `game/vendor/`.
+## The story
 
-## Play
+Porto Verde, 2026. Dante "D" Marlow comes home to find his brother's garage torched and a debt owed to the Marlin Club. One week. Five jobs. No backup. The city is yours to take — on foot or behind the wheel — if the Verde PD doesn't take you first.
 
-Serve the game locally, then open http://localhost:8080:
+## What is in the game
 
-```bash
-node serve.ts
-```
+- **A seeded procedural city** (6×6 blocks): beach and sea to the south, Plaza Verde with its fountain, parks, and landmarks — Marlow Garage, the Marlin Club, Verde PD HQ, St. Verde Hospital, and the Torre Verde tower. Lit windows, street lamps, trees, parked cars.
+- **On foot and behind the wheel**: run, jump, punch, shoot; arcade car physics with a chase camera; traffic on the road grid; pedestrians who stroll the sidewalks and flee danger.
+- **Crime and heat**: carjack any parked car (E) — if a cop sees it, that's a star. Wanted level 0–5: VPD interceptors chase and ram, officers hunt you on foot. Get busted or wasted and you lose 10% of your cash. Lay low and the heat fades.
+- **Five story missions, in order**: steal a car for the garage → a 90-second package run to the Marlin Club → lose a 2-star heat → defeat three rivals at the plaza → ram the rival's coupe and report back. Beacon, minimap blip, timer and distance on screen.
+- **Combat**: F to punch, click to shoot (hitscan pistol, 12-round mag, R to reload).
+- **HUD**: cash, wanted stars, health, ammo, objective with timer/distance, a live 2D minimap, speed, message feed, damage vignette.
+- **Title screen** with Start / Continue (localStorage save), pause menu, and fully synthesized WebAudio — engine hum, sirens, gunshots, mission jingle and a slow A-minor bassline. No audio files.
 
-Or open `game/index.html` through any static file server. Click **START NEW GAME**
-(or **CONTINUE** if a save exists in the browser).
+## Controls
 
 | Key | Action |
 | --- | --- |
-| WASD | Move on foot / drive |
-| Mouse | Left-click shoot · right-drag orbits the camera · wheel zooms |
-| E | Take / leave a car |
-| F | Punch |
-| R | Reload |
-| Space | Jump on foot / brake in a car |
+| WASD / arrows | Move / drive |
 | Shift | Run |
-| P | Pause · M mute |
+| Space | Jump |
+| E | Enter / exit car (carjack a parked car) |
+| F | Punch |
+| Click | Shoot |
+| R | Reload |
+| P | Pause |
+| Drag / pointer lock | Orbit camera |
 
-## The city
+## Run it
 
-Porto Verde is a seeded procedural city: six-by-six blocks of buildings with lit
-windows, a beach and sea to the south, parks, a plaza with a fountain, and landmarks
-— Marlow Garage, the Marlin Club, Verde PD HQ, St. Verde Hospital and the Torre Verde.
-Traffic follows the road grid, pedestrians stroll the sidewalks and flee from trouble.
+```bash
+node serve.ts
+# open http://localhost:8080
+```
 
-## Wanted & police
-
-Stealing a car, hitting a pedestrian, shooting or ramming a police car raises your
-wanted level (1–5 stars). Police cars and officers chase you; get caught standing
-still near them and you're **BUSTED**, lose a fight and you're **WASTED**. Lay low and
-the heat fades, star by star.
-
-## Missions (in order)
-
-1. **Wheels Up** — steal any car and bring it to the garage.
-2. **The Package** — drive the package to the Marlin Club in 90 seconds.
-3. **Heat Check** — lose a 2-star wanted level.
-4. **Rooftop Rumble** — reach the plaza and defeat the 3 rivals.
-5. **The Marlin's Due** — ram the rival's Verde Coupe until it stops, then return
-   to the garage.
-
-Finishing a mission pays cash and saves your progress in the browser
-(`localStorage`); the story ends when the fifth job is done, and free roam continues.
-
-## Sound
-
-All sound is synthesized with WebAudio — engine hum, sirens, gunshots, impacts,
-mission jingles and a bassline that plays over the streets. Nothing is downloaded.
-
-## Files
-
-- `game/index.html` — the game page (HUD is a DOM overlay + 2D minimap canvas)
-- `game/src/` — the game itself: `config.js` (city, story, missions), `random.js`,
-  `audio.js`, `city.js` (procedural city), `sim.js` (player, cars, traffic, peds,
-  police, wanted, missions, combat), `render.js` (three.js scene, camera, HUD),
-  `shots.js` (deterministic screenshot scenes), `main.js` (boot + loop + screens)
-- `game/vendor/three.module.min.js` — three.js r180 (MIT), vendored
-- `screenshots/` — four renders of the real game: action (cover), driving, a mission,
-  a police chase. Each is staged by `?shot=` + a fixed seed, so the same seed always
-  gives the same frame.
-- `main.ts` — the entry program: copies `game/` and `screenshots/` to `/output` and
-  writes `/output/dossier.json` with the vendored make.fun library.
+No build step, no network, no install. The game runs offline in desktop Chrome from static files. three.js r180 is vendored under `game/vendor/` (MIT license, © three.js authors).
 
 ## Screenshots
 
-The shots are deterministic: `?shot=action|drive|mission|chase&seed=7` stages the
-scene by playing the real rules forward from a fresh world, then paints it and sets
-`window.__shotReady`. Reproduce one with a headless browser pointed at the local
-server, e.g. `http://localhost:8080/?shot=drive&seed=7`.
+Deterministic renders (seed 7) — regenerate with the `?shot=` hook:
+
+- `1-action.jpg` — on foot, 3-star wanted, officer closing in
+- `2-drive.jpg` — high-speed drive to the garage beacon
+- `3-mission.jpg` — timed delivery to the Marlin Club
+- `4-chase.jpg` — 4-star chase, three VPD interceptors
+
+## Dossier
+
+```bash
+MAKEFUN_OUTPUT_DIR=out node main.ts
+# writes out/dossier.json (makefun/dossier/v1) and copies game/ + screenshots/
+```
 
 ## License
 
