@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Porto Verde — an open-world crime story</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0c1118; font-family: 'Segoe UI', Arial, sans-serif; }
+  #game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+  #status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .hidden { display: none !important; }
+  /* --- HUD --- */
+  #hud { position: fixed; inset: 0; pointer-events: none; color: #fff; z-index: 5; }
+  .panel { background: rgba(8, 12, 18, 0.62); border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 8px; padding: 8px 12px; }
+  #topleft { position: absolute; top: 12px; left: 12px; min-width: 240px; }
+  #cash { font-size: 26px; font-weight: 800; color: #7ddc7d; letter-spacing: 0.5px; }
+  #stars { font-size: 24px; letter-spacing: 4px; color: #8a97a8; line-height: 1.1; }
+  #stars.hot { color: #ffb02e; text-shadow: 0 0 8px rgba(255, 80, 40, 0.8); }
+  #healthbar { height: 12px; background: rgba(255,255,255,0.18); border-radius: 6px; overflow: hidden; margin-top: 6px; }
+  #health-fill { height: 100%; width: 100%; background: linear-gradient(90deg, #37d67a, #7ddc7d); transition: width 0.2s; }
+  #health-row { display: flex; justify-content: space-between; font-size: 12px; margin-top: 3px; color: #dfe6ee; }
+  #ammo { font-size: 14px; font-weight: 700; color: #ffd34d; margin-top: 4px; }
+  #objective { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); max-width: 46%; text-align: center; font-size: 15px; font-weight: 700; color: #ffe9a8; text-shadow: 0 1px 3px rgba(0,0,0,0.9); }
+  #minimap-wrap { position: absolute; top: 12px; right: 12px; }
+  #minimap { width: 190px; height: 190px; border-radius: 50%; border: 3px solid rgba(255,255,255,0.35); box-shadow: 0 2px 14px rgba(0,0,0,0.6); background: #10151d; display: block; }
+  #speed { position: absolute; right: 18px; bottom: 16px; text-align: right; font-weight: 800; color: #fff; text-shadow: 0 2px 6px rgba(0,0,0,0.8); }
+  #speed .num { font-size: 44px; line-height: 1; }
+  #speed .unit { font-size: 14px; color: #ffd34d; }
+  #hint { position: absolute; left: 12px; bottom: 12px; font-size: 12px; color: rgba(255,255,255,0.75); text-shadow: 0 1px 2px rgba(0,0,0,0.9); line-height: 1.5; }
+  #messages { position: absolute; left: 12px; bottom: 110px; font-size: 15px; font-weight: 700; color: #ffe9a8; text-shadow: 0 1px 3px rgba(0,0,0,0.9); line-height: 1.6; }
+  #vignette { position: fixed; inset: 0; pointer-events: none; z-index: 4; opacity: 0; background: radial-gradient(ellipse at center, transparent 55%, rgba(200, 20, 20, 0.55) 100%); transition: opacity 0.3s; }
+  #toast { position: fixed; top: 38%; left: 50%; transform: translate(-50%, -50%); z-index: 6; font-size: 44px; font-weight: 900; letter-spacing: 3px; color: #ffd34d; text-shadow: 0 3px 0 #7a4d00, 0 6px 18px rgba(0,0,0,0.8); pointer-events: none; }
+  /* --- full screens --- */
+  .screen { position: fixed; inset: 0; z-index: 10; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; color: #fff; background: linear-gradient(160deg, rgba(10, 18, 30, 0.88), rgba(40, 20, 40, 0.82)); padding: 24px; }
+  .screen h1 { font-size: 64px; margin: 0; letter-spacing: 6px; color: #ffd34d; text-shadow: 0 4px 0 #7a4d00, 0 8px 24px rgba(0,0,0,0.9); font-weight: 900; }
+  .screen h2 { font-size: 20px; margin: 6px 0 18px; color: #dfe6ee; font-weight: 600; }
+  .screen p { max-width: 620px; line-height: 1.6; color: #c8d2de; margin: 6px 0; }
+  .controls { display: grid; grid-template-columns: auto auto; gap: 4px 18px; text-align: left; font-size: 14px; margin: 16px 0; color: #dfe6ee; }
+  .controls b { color: #ffd34d; }
+  .btn { pointer-events: auto; cursor: pointer; font-size: 18px; font-weight: 800; letter-spacing: 1px; color: #101418; background: #ffd34d; border: none; border-radius: 8px; padding: 12px 28px; margin: 6px; box-shadow: 0 4px 0 #a67c00; }
+  .btn:hover { background: #ffe08a; }
+  .btn.ghost { background: transparent; color: #ffd34d; border: 2px solid #ffd34d; box-shadow: none; }
+  .fine { font-size: 12px; color: #8a97a8; margin-top: 18px; }
+  #end-title { font-size: 72px; color: #ff5040; text-shadow: 0 4px 0 #5a0d00, 0 8px 24px rgba(0,0,0,0.9); }
+</style>
+<script type="importmap">
+{ "imports": { "three": "./vendor/three.module.min.js" } }
+</script>
+</head>
+<body>
+<canvas id="game" aria-label="Porto Verde: an open-world crime game. Drive, steal cars, dodge the police and finish five missions."></canvas>
+<p id="status" role="status" aria-live="polite"></p>
+<div id="vignette"></div>
+<div id="hud">
+  <div id="topleft" class="panel">
+    <div id="cash">$0</div>
+    <div id="stars">☆☆☆☆☆</div>
+    <div id="healthbar"><div id="health-fill"></div></div>
+    <div id="health-row"><span>HEALTH</span><span id="health-num">100</span></div>
+    <div id="ammo">AMMO 12 / 12</div>
+  </div>
+  <div id="objective" class="panel">Porto Verde</div>
+  <div id="minimap-wrap"><canvas id="minimap" width="190" height="190"></canvas></div>
+  <div id="speed"><span class="num"></span> <span class="unit" id="speed-label"></span></div>
+  <div id="messages"></div>
+  <div id="hint">WASD move / drive &nbsp;·&nbsp; Mouse: left-click shoot, right-drag camera, wheel zoom<br>
+  E take car &nbsp;·&nbsp; F punch &nbsp;·&nbsp; R reload &nbsp;·&nbsp; Space jump / brake &nbsp;·&nbsp; P pause &nbsp;·&nbsp; M mute</div>
+</div>
+<div id="toast" class="hidden"></div>
+
+<div id="screen-title" class="screen">
+  <h1>PORTO VERDE</h1>
+  <h2>An open-world crime story — five jobs, one week, no backup.</h2>
+  <p>Dante "D" Marlow comes home to find his brother's garage torched and a debt owed to the
+  Marlin Club. Steal cars, outrun the Verde PD, and finish all five jobs to own the city —
+  on foot or behind the wheel.</p>
+  <div class="controls">
+    <span><b>WASD</b> — move / drive</span><span><b>Mouse</b> — left-click shoot, right-drag camera</span>
+    <span><b>E</b> — take / leave a car</span><span><b>F</b> — punch</span>
+    <span><b>R</b> — reload</span><span><b>Space</b> — jump / brake</span>
+    <span><b>Shift</b> — run</span><span><b>P</b> — pause &nbsp; <b>M</b> — mute</span>
+  </div>
+  <div>
+    <button id="btn-start" class="btn">START NEW GAME</button>
+    <button id="btn-continue" class="btn ghost hidden">CONTINUE</button>
+  </div>
+  <p class="fine">Progress saves in this browser. An original game — city, characters, vehicles, story,
+  art and sound are all made for this game. Not affiliated with Rockstar Games.</p>
+</div>
+
+<div id="screen-pause" class="screen hidden">
+  <h1 style="font-size:44px">PAUSED</h1>
+  <p>Porto Verde waits for no one. Well — except now.</p>
+  <div>
+    <button id="btn-resume" class="btn">RESUME</button>
+    <button id="btn-quit" class="btn ghost">SAVE &amp; QUIT TO TITLE</button>
+  </div>
+</div>
+
+<div id="screen-end" class="screen hidden">
+  <h1 id="end-title">BUSTED</h1>
+  <p id="end-text"></p>
+  <div><button id="btn-respawn" class="btn">BACK TO THE STREETS</button></div>
+</div>
+
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>
