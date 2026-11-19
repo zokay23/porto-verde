@@ -1,5 +1,6 @@
-// Porto Verde simulation: the player, cars, traffic, pedestrians, police, wanted
-// level, missions and combat. The renderer only draws what this module owns.
+// Porto Verde simulation: the player, cars, traffic, pedestrians, police,
+// the wanted level, the five missions and combat. The renderer only draws
+// what this module owns — all rules live here.
 import * as THREE from 'three';
 import { BLOCK, CAR, CAR_NAMES, CITY_HALF, COLORS, MISSIONS, PITCH, PLACES, PLAYER, SAVE_KEY, STREET, WANTED } from './config.js';
 import { createRandom } from './random.js';
@@ -15,7 +16,8 @@ function angleLerp(a, b, t) {
 }
 
 function dist2(ax, az, bx, bz) {
-  const dx = ax - bx; const dz = az - bz;
+  const dx = ax - bx;
+  const dz = az - bz;
   return dx * dx + dz * dz;
 }
 
@@ -34,7 +36,7 @@ export function createGame(audio) {
 
   // --- shared state -------------------------------------------------------------
   const state = {
-    mode: 'title', // title | play | paused | busted | wasted
+    mode: 'title', // title | play | paused | busted | wasted | end
     time: 0,
     cash: 0,
     wanted: 0,
@@ -58,20 +60,24 @@ export function createGame(audio) {
     walkPhase: 0, moving: false,
   };
 
-  // Mission beacon: a light column + ring on the ground.
+  // --- mission beacon: light column + ground ring ---------------------------------
   const beacon = new THREE.Group();
   const beaconMat = new THREE.MeshBasicMaterial({ color: 0xffd34d, transparent: true, opacity: 0.35, side: THREE.DoubleSide, depthWrite: false });
   const beaconCyl = new THREE.Mesh(new THREE.CylinderGeometry(3, 3, 40, 16, 1, true), beaconMat);
   beaconCyl.position.y = 20;
   const beaconRing = new THREE.Mesh(new THREE.TorusGeometry(3, 0.25, 8, 32), new THREE.MeshBasicMaterial({ color: 0xffd34d }));
-  beaconRing.rotation.x = Math.PI / 2; beaconRing.position.y = 0.4;
-  beacon.add(beaconCyl); beacon.add(beaconRing);
+  beaconRing.rotation.x = Math.PI / 2;
+  beaconRing.position.y = 0.4;
+  beacon.add(beaconCyl);
+  beacon.add(beaconRing);
   beacon.visible = false;
   worldGroup.add(beacon);
   const beaconPos = { x: 0, z: 0, active: false };
 
   function setBeacon(x, z, active) {
-    beaconPos.x = x; beaconPos.z = z; beaconPos.active = active;
+    beaconPos.x = x;
+    beaconPos.z = z;
+    beaconPos.active = active;
     beacon.position.set(x, 0, z);
     beacon.visible = active;
   }
@@ -91,7 +97,7 @@ export function createGame(audio) {
     }
   }
 
-  // --- cars ---------------------------------------------------------------------
+  // --- cars -----------------------------------------------------------------------
   const cars = [];
   const carBodyGeo = new THREE.BoxGeometry(1.9, 0.62, 4.2);
   const carCabinGeo = new THREE.BoxGeometry(1.6, 0.55, 2.1);
@@ -100,19 +106,21 @@ export function createGame(audio) {
   function buildCarMesh(color, isPolice) {
     const g = new THREE.Group();
     const body = new THREE.Mesh(carBodyGeo, new THREE.MeshLambertMaterial({ color }));
-    body.position.y = 0.55; body.castShadow = true;
+    body.position.y = 0.55;
+    body.castShadow = true;
     g.add(body);
     const cabin = new THREE.Mesh(carCabinGeo, new THREE.MeshLambertMaterial({ color: 0x1a2028 }));
-    cabin.position.set(0, 1.1, -0.2); cabin.castShadow = true;
+    cabin.position.set(0, 1.1, -0.2);
+    cabin.castShadow = true;
     g.add(cabin);
     const wheelMat = new THREE.MeshLambertMaterial({ color: 0x141414 });
-    const wheelPos = [[-0.85, 1.35], [0.85, 1.35], [-0.85, -1.35], [0.85, -1.35]];
     const wheels = [];
-    for (const [wx, wz] of wheelPos) {
+    for (const [wx, wz] of [[-0.85, 1.35], [0.85, 1.35], [-0.85, -1.35], [0.85, -1.35]]) {
       const w = new THREE.Mesh(wheelGeo, wheelMat);
       w.rotation.z = Math.PI / 2;
       w.position.set(wx, 0.36, wz);
-      g.add(w); wheels.push(w);
+      g.add(w);
+      wheels.push(w);
     }
     const headMat = new THREE.MeshLambertMaterial({ color: 0xfff2b0, emissive: 0xffedb0, emissiveIntensity: 0.6 });
     const tailMat = new THREE.MeshLambertMaterial({ color: 0xaa1111, emissive: 0x661111, emissiveIntensity: 0.5 });
@@ -130,7 +138,8 @@ export function createGame(audio) {
       red.position.x = -0.35;
       const blue = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.16, 0.3), new THREE.MeshBasicMaterial({ color: 0x2040ff }));
       blue.position.x = 0.35;
-      bar.add(red); bar.add(blue);
+      bar.add(red);
+      bar.add(blue);
       bar.position.y = 1.5;
       g.add(bar);
       g.userData.lightBar = { red, blue };
@@ -154,7 +163,7 @@ export function createGame(audio) {
     return car;
   }
 
-  // Parked cars to steal.
+  // Parked cars to steal, from the city's spawn points.
   const parkedCars = [];
   for (const s of city.carSpawns) parkedCars.push(addCar(s.x, s.z, s.angle, { parked: true }));
 
@@ -173,7 +182,7 @@ export function createGame(audio) {
   }
   for (let i = 0; i < 12; i += 1) spawnTraffic();
 
-  // --- pedestrians ---------------------------------------------------------------
+  // --- pedestrians ------------------------------------------------------------------
   const peds = [];
   const pedShirts = [0xc25a4a, 0x4a7ac2, 0x5aa04a, 0xc2a24a, 0x8a5ac2, 0x4ac2b8, 0xd0d0d0];
 
@@ -209,7 +218,7 @@ export function createGame(audio) {
     return ped;
   }
 
-  // Sidewalk assignment: the nearest road line and which side to walk on.
+  // Give a strolling ped a sidewalk to follow: the nearest road line, one side.
   function assignRoad(ped) {
     const lines = city.roadLines;
     const lx = lines.reduce((b, l) => (Math.abs(ped.x - l) < Math.abs(ped.x - b) ? l : b), lines[0]);
@@ -226,11 +235,11 @@ export function createGame(audio) {
     assignRoad(ped);
   }
 
-  // --- player mesh ----------------------------------------------------------------
+  // --- player mesh --------------------------------------------------------------------
   const playerMesh = buildPersonMesh(0x2f8a7a, 0x2a2f3a, 0xc89878);
   worldGroup.add(playerMesh);
 
-  // --- health pickups ---------------------------------------------------------------
+  // --- health pickups -------------------------------------------------------------------
   const pickups = [];
   const pickupSpots = [
     { x: PLACES.hospital.x, z: PLACES.hospital.z - 12 },
@@ -249,7 +258,7 @@ export function createGame(audio) {
     pickups.push({ x: s.x, z: s.z, mesh: g, respawn: 0 });
   }
 
-  // --- tracers ------------------------------------------------------------------------
+  // --- bullet tracers ---------------------------------------------------------------------
   const tracers = [];
   const tracerMat = new THREE.MeshBasicMaterial({ color: 0xffe9a8 });
   function spawnTracer(from, to) {
@@ -262,7 +271,7 @@ export function createGame(audio) {
     tracers.push({ mesh: m, life: 0.09 });
   }
 
-  // --- police ---------------------------------------------------------------------------
+  // --- police --------------------------------------------------------------------------------
   const policeCars = [];
   const policePeds = [];
   let policeSpawnTimer = 0;
@@ -280,7 +289,7 @@ export function createGame(audio) {
     return ped;
   }
 
-  // --- rivals (mission 4) ------------------------------------------------------------------
+  // --- rivals (mission 4) -----------------------------------------------------------------------
   const rivals = [];
   function spawnRivals() {
     for (let i = 0; i < 3; i += 1) {
@@ -288,18 +297,21 @@ export function createGame(audio) {
       const ped = addPed(PLACES.plaza.x + Math.cos(a) * 8, PLACES.plaza.z + Math.sin(a) * 8, {
         shirt: 0x8a1f1f, pants: 0x1a1a1a, state: 'rival', health: 60, rival: true,
       });
-      // Health bar above the head (two sprites: dark back, green front).
+      // Health bar above the head: dark back, green front that shrinks.
       const back = new THREE.Sprite(new THREE.SpriteMaterial({ color: 0x331111, depthTest: false }));
-      back.scale.set(1.6, 0.18, 1); back.position.y = 2.1;
+      back.scale.set(1.6, 0.18, 1);
+      back.position.y = 2.1;
       const front = new THREE.Sprite(new THREE.SpriteMaterial({ color: 0x37d67a, depthTest: false }));
-      front.scale.set(1.6, 0.18, 1); front.position.y = 2.1;
-      ped.mesh.add(back); ped.mesh.add(front);
+      front.scale.set(1.6, 0.18, 1);
+      front.position.y = 2.1;
+      ped.mesh.add(back);
+      ped.mesh.add(front);
       ped.healthBar = front;
       rivals.push(ped);
     }
   }
 
-  // --- target car (mission 5) ---------------------------------------------------------------
+  // --- target car (mission 5) ----------------------------------------------------------------------
   let targetCar = null;
   function spawnTargetCar() {
     targetCar = addCar(PITCH * 2 + 20, -PITCH, Math.PI / 2, { name: 'Verde Coupe', color: 0x2f8a2f, target: true });
@@ -308,12 +320,16 @@ export function createGame(audio) {
     targetCar.health = 100;
   }
 
-  // --- missions ------------------------------------------------------------------------------
+  // --- missions ---------------------------------------------------------------------------------------
   function currentMission() { return MISSIONS[state.missionIndex] || null; }
 
   function startMission(index) {
     const m = MISSIONS[index];
-    if (!m) { state.missionPhase = 'done'; setBeacon(0, 0, false); return; }
+    if (!m) {
+      state.missionPhase = 'done';
+      setBeacon(0, 0, false);
+      return;
+    }
     state.missionIndex = index;
     state.missionTimer = m.timeLimit || 0;
     state.missionKills = 0;
@@ -327,8 +343,10 @@ export function createGame(audio) {
       message(`${m.name}: ${m.text}`);
     } else if (m.kind === 'lose-wanted') {
       state.missionPhase = 'evade';
-      state.wanted = 2; state.wantedTimer = 0;
-      spawnPoliceCar(); spawnPoliceCar();
+      state.wanted = 2;
+      state.wantedTimer = 0;
+      spawnPoliceCar();
+      spawnPoliceCar();
       setBeacon(0, 0, false);
       message(`${m.name}: ${m.text}`);
     } else if (m.kind === 'defeat') {
@@ -375,14 +393,14 @@ export function createGame(audio) {
   }
 
   // --- combat ----------------------------------------------------------------------------------
+  // Ray vs people (sphere at chest height), cars (sphere at centre) and
+  // buildings (AABB slab test). Returns the nearest hit, or null.
   function rayHit(origin, dir, maxDist) {
-    // Returns {kind, obj, point, dist} for the nearest hit, or null.
     let best = null;
     function consider(dist, kind, obj, point) {
       if (dist < 0 || dist > maxDist) return;
       if (!best || dist < best.dist) best = { dist, kind, obj, point };
     }
-    // People (sphere r=0.9 at chest height).
     for (const ped of peds) {
       if (ped.down > 0) continue;
       const cx = ped.x - origin.x; const cy = 1.2 - origin.y; const cz = ped.z - origin.z;
@@ -392,7 +410,6 @@ export function createGame(audio) {
       const d2 = (px - ped.x) ** 2 + (py - 1.2) ** 2 + (pz - ped.z) ** 2;
       if (d2 < 0.81) consider(t, 'ped', ped, { x: px, y: py, z: pz });
     }
-    // Cars (sphere r=2.2 at centre).
     for (const car of cars) {
       if (car === player.inCar) continue;
       const cx = car.x - origin.x; const cy = 0.8 - origin.y; const cz = car.z - origin.z;
@@ -402,18 +419,25 @@ export function createGame(audio) {
       const d2 = (px - car.x) ** 2 + (py - 0.8) ** 2 + (pz - car.z) ** 2;
       if (d2 < 4.84) consider(t, 'car', car, { x: px, y: py, z: pz });
     }
-    // Buildings (AABB slab test, coarse).
     for (const b of city.colliders) {
       if (origin.x > b.minX && origin.x < b.maxX && origin.z > b.minZ && origin.z < b.maxZ) continue;
-      let tmin = 0; let tmax = maxDist;
-      const o = [origin.x, origin.z]; const d = [dir.x, dir.z];
-      const mn = [b.minX, b.minZ]; const mx = [b.maxX, b.maxZ];
+      let tmin = 0;
+      let tmax = maxDist;
+      const o = [origin.x, origin.z];
+      const d = [dir.x, dir.z];
+      const mn = [b.minX, b.minZ];
+      const mx = [b.maxX, b.maxZ];
       let ok = true;
       for (let a = 0; a < 2; a += 1) {
-        if (Math.abs(d[a]) < 1e-6) { if (o[a] < mn[a] || o[a] > mx[a]) { ok = false; break; } continue; }
-        let t1 = (mn[a] - o[a]) / d[a]; let t2 = (mx[a] - o[a]) / d[a];
+        if (Math.abs(d[a]) < 1e-6) {
+          if (o[a] < mn[a] || o[a] > mx[a]) { ok = false; break; }
+          continue;
+        }
+        let t1 = (mn[a] - o[a]) / d[a];
+        let t2 = (mx[a] - o[a]) / d[a];
         if (t1 > t2) { const tmp = t1; t1 = t2; t2 = tmp; }
-        tmin = Math.max(tmin, t1); tmax = Math.min(tmax, t2);
+        tmin = Math.max(tmin, t1);
+        tmax = Math.min(tmax, t2);
         if (tmin > tmax) { ok = false; break; }
       }
       if (ok && tmin < maxDist && origin.y + dir.y * tmin < 30) {
@@ -425,7 +449,11 @@ export function createGame(audio) {
 
   function shoot(camPos, camDir) {
     if (state.reloading > 0 || player.shootCd > 0 || player.inCar) return;
-    if (state.ammo <= 0) { state.reloading = PLAYER.reloadTime; message('Reloading…'); return; }
+    if (state.ammo <= 0) {
+      state.reloading = PLAYER.reloadTime;
+      message('Reloading…');
+      return;
+    }
     player.shootCd = PLAYER.pistolCooldown;
     state.ammo -= 1;
     state.stats.shots += 1;
@@ -437,31 +465,36 @@ export function createGame(audio) {
     }
     const origin = { x: camPos.x, y: camPos.y, z: camPos.z };
     const hit = rayHit(origin, camDir, PLAYER.pistolRange);
-    const end = hit ? hit.point : { x: origin.x + camDir.x * PLAYER.pistolRange, y: origin.y + camDir.y * PLAYER.pistolRange, z: origin.z + camDir.z * PLAYER.pistolRange };
+    const end = hit
+      ? hit.point
+      : { x: origin.x + camDir.x * PLAYER.pistolRange, y: origin.y + camDir.y * PLAYER.pistolRange, z: origin.z + camDir.z * PLAYER.pistolRange };
     spawnTracer({ x: player.x, y: 1.4, z: player.z }, end);
-    if (hit) {
-      state.stats.hits += 1;
-      if (hit.kind === 'ped') {
-        const ped = hit.obj;
-        ped.health -= PLAYER.pistolDamage;
-        if (ped.health <= 0) {
-          ped.down = 12; ped.state = 'down';
-          if (ped.rival) {
-            state.missionKills += 1;
-            message(`Rival down (${state.missionKills}/3)`);
-          } else {
-            addWanted(1, 'pedestrian down');
-          }
-        } else if (!ped.police) {
-          ped.state = 'flee'; ped.fleeX = player.x; ped.fleeZ = player.z;
+    if (!hit) return;
+    state.stats.hits += 1;
+    if (hit.kind === 'ped') {
+      const ped = hit.obj;
+      ped.health -= PLAYER.pistolDamage;
+      if (ped.health <= 0) {
+        ped.down = 12;
+        ped.state = 'down';
+        if (ped.rival) {
+          state.missionKills += 1;
+          message(`Rival down (${state.missionKills}/3)`);
+        } else {
+          addWanted(1, 'pedestrian down');
         }
-      } else if (hit.kind === 'car') {
-        const car = hit.obj;
-        car.health -= PLAYER.pistolDamage;
-        if (car.health <= 0 && !car.disabled) {
-          car.disabled = true; car.speed = 0;
-          message(`${car.name} disabled`);
-        }
+      } else if (!ped.police) {
+        ped.state = 'flee';
+        ped.fleeX = player.x;
+        ped.fleeZ = player.z;
+      }
+    } else if (hit.kind === 'car') {
+      const car = hit.obj;
+      car.health -= PLAYER.pistolDamage;
+      if (car.health <= 0 && !car.disabled) {
+        car.disabled = true;
+        car.speed = 0;
+        message(`${car.name} disabled`);
       }
     }
   }
@@ -470,28 +503,37 @@ export function createGame(audio) {
     if (player.punchCd > 0 || player.inCar) return;
     player.punchCd = PLAYER.punchCooldown;
     audio.punch();
-    const fx = Math.sin(player.angle); const fz = Math.cos(player.angle);
+    const fx = Math.sin(player.angle);
+    const fz = Math.cos(player.angle);
     for (const ped of peds) {
       if (ped.down > 0) continue;
-      const dx = ped.x - player.x; const dz = ped.z - player.z;
+      const dx = ped.x - player.x;
+      const dz = ped.z - player.z;
       const d = Math.hypot(dx, dz);
       if (d < PLAYER.punchRange && (dx * fx + dz * fz) / Math.max(d, 0.01) > 0.3) {
         ped.health -= PLAYER.punchDamage;
         if (ped.health <= 0) {
-          ped.down = 12; ped.state = 'down';
-          if (ped.rival) { state.missionKills += 1; message(`Rival down (${state.missionKills}/3)`); }
+          ped.down = 12;
+          ped.state = 'down';
+          if (ped.rival) {
+            state.missionKills += 1;
+            message(`Rival down (${state.missionKills}/3)`);
+          }
         } else if (ped.police) {
           addWanted(1, 'assaulted an officer');
         } else {
-          ped.state = 'flee'; ped.fleeX = player.x; ped.fleeZ = player.z;
+          ped.state = 'flee';
+          ped.fleeX = player.x;
+          ped.fleeZ = player.z;
         }
       }
     }
   }
 
-  // --- car entry / exit -------------------------------------------------------------------------
+  // --- car entry / exit ------------------------------------------------------------------------
   function nearestParkedCar(maxD) {
-    let best = null; let bestD = maxD;
+    let best = null;
+    let bestD = maxD;
     for (const car of parkedCars) {
       if (car.disabled) continue;
       const d = Math.hypot(car.x - player.x, car.z - player.z);
@@ -506,7 +548,8 @@ export function createGame(audio) {
     state.stats.carsStolen += 1;
     audio.pickup();
     message(`You took the ${car.name}`);
-    const nearCop = policeCars.some((c) => dist2(c.x, c.z, player.x, player.z) < 900) || policePeds.some((p) => dist2(p.x, p.z, player.x, player.z) < 900);
+    const nearCop = policeCars.some((c) => dist2(c.x, c.z, player.x, player.z) < 900)
+      || policePeds.some((p) => dist2(p.x, p.z, player.x, player.z) < 900);
     if (nearCop) addWanted(1, 'carjacking witnessed');
     if (currentMission() && currentMission().kind === 'steal-deliver' && state.missionPhase === 'steal') {
       state.missionPhase = 'deliver';
@@ -523,39 +566,55 @@ export function createGame(audio) {
     const car = player.inCar;
     if (!car) return;
     player.inCar = null;
-    const bx = Math.sin(car.angle); const bz = Math.cos(car.angle);
-    player.x = car.x - bx * 2.2; player.z = car.z - bz * 2.2;
-    player.y = 0; player.vy = 0;
+    const bx = Math.sin(car.angle);
+    const bz = Math.cos(car.angle);
+    player.x = car.x - bx * 2.2;
+    player.z = car.z - bz * 2.2;
+    player.y = 0;
+    player.vy = 0;
     const c = collideCircle(city.colliders, player.x, player.z, PLAYER.radius);
-    player.x = c.x; player.z = c.z;
+    player.x = c.x;
+    player.z = c.z;
     playerMesh.visible = true;
   }
 
-  // --- respawn after busted / wasted ---------------------------------------------------------------
+  // --- respawn after busted / wasted -------------------------------------------------------------
   function respawn(where) {
-    state.wanted = 0; state.wantedTimer = 0;
-    state.health = PLAYER.health; player.health = PLAYER.health;
+    state.wanted = 0;
+    state.wantedTimer = 0;
+    state.health = PLAYER.health;
+    player.health = PLAYER.health;
     state.ammo = PLAYER.magSize;
     state.cash = Math.floor(state.cash * 0.9);
-    for (const c of policeCars) { c.mesh.visible = false; }
+    for (const c of policeCars) c.mesh.visible = false;
     policeCars.length = 0;
-    for (const p of policePeds) { p.mesh.visible = false; peds.splice(peds.indexOf(p), 1); }
+    for (const p of policePeds) {
+      p.mesh.visible = false;
+      peds.splice(peds.indexOf(p), 1);
+    }
     policePeds.length = 0;
-    if (player.inCar) { player.inCar = null; playerMesh.visible = true; }
+    if (player.inCar) {
+      player.inCar = null;
+      playerMesh.visible = true;
+    }
     const spot = where === 'hospital' ? PLACES.hospital : PLACES.garage;
-    player.x = spot.x; player.z = spot.z + 8; player.y = 0;
+    player.x = spot.x;
+    player.z = spot.z + 8;
+    player.y = 0;
     playerMesh.position.set(player.x, 0, player.z);
     state.mode = 'play';
     message(where === 'hospital' ? 'You woke up at St. Verde. The bill stings.' : 'Verde PD let you go. This time.');
     saveGame();
   }
 
-  // --- per-frame step ---------------------------------------------------------------------------------
+  // --- per-frame steps -----------------------------------------------------------------------------
   function stepPlayer(dt, input) {
     if (player.inCar) return;
     const speed = input.run ? PLAYER.runSpeed : PLAYER.walkSpeed;
-    let mx = 0; let mz = 0;
-    const sy = Math.sin(input.camYaw); const cy = Math.cos(input.camYaw);
+    let mx = 0;
+    let mz = 0;
+    const sy = Math.sin(input.camYaw);
+    const cy = Math.cos(input.camYaw);
     if (input.fwd) { mx += -sy; mz += -cy; }
     if (input.back) { mx += sy; mz += cy; }
     if (input.left) { mx += -cy; mz += sy; }
@@ -563,10 +622,11 @@ export function createGame(audio) {
     const len = Math.hypot(mx, mz);
     player.moving = len > 0;
     if (len > 0) {
-      mx /= len; mz /= len;
-      const targetAngle = Math.atan2(mx, mz);
-      player.angle = angleLerp(player.angle, targetAngle, Math.min(1, dt * 12));
-      player.vx = mx * speed; player.vz = mz * speed;
+      mx /= len;
+      mz /= len;
+      player.angle = angleLerp(player.angle, Math.atan2(mx, mz), Math.min(1, dt * 12));
+      player.vx = mx * speed;
+      player.vz = mz * speed;
       player.walkPhase += dt * speed * 1.6;
     } else {
       player.vx *= Math.max(0, 1 - dt * 10);
@@ -574,29 +634,48 @@ export function createGame(audio) {
     }
     player.x += player.vx * dt;
     player.z += player.vz * dt;
-    if (input.jump && player.grounded) { player.vy = PLAYER.jumpSpeed; player.grounded = false; }
+    if (input.jump && player.grounded) {
+      player.vy = PLAYER.jumpSpeed;
+      player.grounded = false;
+    }
     player.vy -= PLAYER.gravity * dt;
     player.y += player.vy * dt;
-    if (player.y <= 0) { player.y = 0; player.vy = 0; player.grounded = true; }
+    if (player.y <= 0) {
+      player.y = 0;
+      player.vy = 0;
+      player.grounded = true;
+    }
     const c = collideCircle(city.colliders, player.x, player.z, PLAYER.radius);
-    player.x = c.x; player.z = c.z;
+    player.x = c.x;
+    player.z = c.z;
     const cl = clampToWorld(player.x, player.z);
-    player.x = cl.x; player.z = cl.z;
+    player.x = cl.x;
+    player.z = cl.z;
     player.punchCd = Math.max(0, player.punchCd - dt);
     player.shootCd = Math.max(0, player.shootCd - dt);
     if (state.reloading > 0) {
       state.reloading -= dt;
-      if (state.reloading <= 0) { state.ammo = PLAYER.magSize; message('Reloaded'); }
+      if (state.reloading <= 0) {
+        state.ammo = PLAYER.magSize;
+        message('Reloaded');
+      }
     }
-    // Health regen out of trouble.
-    if (state.wanted === 0 && player.health < PLAYER.health) player.health = Math.min(PLAYER.health, player.health + 4 * dt);
+    // Health comes back slowly when nobody is after you.
+    if (state.wanted === 0 && player.health < PLAYER.health) {
+      player.health = Math.min(PLAYER.health, player.health + 4 * dt);
+    }
     state.health = player.health;
-    // Pickups.
+    // First-aid pickups.
     for (const p of pickups) {
-      if (p.respawn > 0) { p.respawn -= dt; p.mesh.visible = p.respawn <= 0; continue; }
+      if (p.respawn > 0) {
+        p.respawn -= dt;
+        p.mesh.visible = p.respawn <= 0;
+        continue;
+      }
       if (dist2(player.x, player.z, p.x, p.z) < 2.25 && player.health < PLAYER.health) {
         player.health = Math.min(PLAYER.health, player.health + 40);
-        p.respawn = 30; p.mesh.visible = false;
+        p.respawn = 30;
+        p.mesh.visible = false;
         audio.pickup();
         message('First aid +40');
       }
@@ -614,11 +693,10 @@ export function createGame(audio) {
       else car.speed *= Math.max(0, 1 - dt * 0.6);
       car.speed = Math.max(-CAR.reverseMax, Math.min(CAR.maxSpeed, car.speed));
       const steerIn = input.left ? 1 : input.right ? -1 : 0;
-      const steerAuthority = Math.min(1, Math.abs(car.speed) / 8);
-      car.angle += steerIn * CAR.steer * steerAuthority * Math.sign(car.speed || 1) * dt * (car.speed < 0 ? -1 : 1);
+      const authority = Math.min(1, Math.abs(car.speed) / 8);
+      car.angle += steerIn * CAR.steer * authority * Math.sign(car.speed || 1) * dt * (car.speed < 0 ? -1 : 1);
     } else if (car.traffic) {
       const t = car.traffic;
-      t.speed = Math.min(t.speed, CAR.trafficSpeed);
       // Slow for the car ahead on the same lane.
       for (const other of cars) {
         if (other === car || !other.traffic) continue;
@@ -627,7 +705,7 @@ export function createGame(audio) {
         if (gap > 0 && gap < 10) t.speed = Math.max(0, t.speed - 20 * dt);
       }
       t.pos += t.dir * t.speed * dt;
-      // At an intersection, sometimes turn.
+      // At an intersection, sometimes turn onto a crossing road.
       const lines = city.roadLines;
       const nearest = lines.reduce((best, l) => (Math.abs(t.pos - l) < Math.abs(t.pos - best) ? l : best), lines[0]);
       if (Math.abs(t.pos - nearest) < 0.6 && rng.chance(0.3)) {
@@ -639,17 +717,17 @@ export function createGame(audio) {
           t.dir = rng.next() < 0.5 ? 1 : -1;
         }
       }
-      if (t.pos > CITY_HALF - 6) { t.dir = -1; }
-      if (t.pos < -CITY_HALF + 6) { t.dir = 1; }
+      if (t.pos > CITY_HALF - 6) t.dir = -1;
+      if (t.pos < -CITY_HALF + 6) t.dir = 1;
       car.speed = t.speed * t.dir;
       car.angle = t.axis === 'x' ? (t.dir > 0 ? Math.PI / 2 : -Math.PI / 2) : (t.dir > 0 ? 0 : Math.PI);
     } else if (car.police) {
-      // Police pursuit: steer straight at the player, slide along walls.
+      // Police pursuit: steer straight at the player, faster with more stars.
       const tx = player.inCar ? player.inCar.x : player.x;
       const tz = player.inCar ? player.inCar.z : player.z;
-      const dx = tx - car.x; const dz = tz - car.z;
-      const want = Math.atan2(dx, dz);
-      car.angle = angleLerp(car.angle, want, Math.min(1, dt * 2.2));
+      const dx = tx - car.x;
+      const dz = tz - car.z;
+      car.angle = angleLerp(car.angle, Math.atan2(dx, dz), Math.min(1, dt * 2.2));
       const dist = Math.hypot(dx, dz);
       const targetSpeed = dist > 6 ? Math.min(38, 18 + state.wanted * 3) : 0;
       car.speed += (targetSpeed - car.speed) * Math.min(1, dt * 1.5);
@@ -661,8 +739,7 @@ export function createGame(audio) {
       const lines = city.roadLines;
       const nearest = lines.reduce((best, l) => (Math.abs(t.pos - l) < Math.abs(t.pos - best) ? l : best), lines[0]);
       if (Math.abs(t.pos - nearest) < 0.6 && rng.chance(0.5)) {
-        const away = Math.abs(player.x) > Math.abs(player.z) ? 'z' : 'x';
-        t.axis = away;
+        t.axis = Math.abs(player.x) > Math.abs(player.z) ? 'z' : 'x';
         t.line = nearest;
         t.pos = (rng.next() * 2 - 1) * (CITY_HALF - 40);
         t.dir = rng.next() < 0.5 ? 1 : -1;
@@ -672,29 +749,36 @@ export function createGame(audio) {
       car.speed = t.speed * t.dir;
       car.angle = t.axis === 'x' ? (t.dir > 0 ? Math.PI / 2 : -Math.PI / 2) : (t.dir > 0 ? 0 : Math.PI);
     }
-    const fx = Math.sin(car.angle); const fz = Math.cos(car.angle);
+    const fx = Math.sin(car.angle);
+    const fz = Math.cos(car.angle);
     car.x += fx * car.speed * dt;
     car.z += fz * car.speed * dt;
     const c = collideCircle(city.colliders, car.x, car.z, 1.7);
     if ((c.x !== car.x || c.z !== car.z) && Math.abs(car.speed) > 6) {
-      if (isPlayer) { audio.crash(); car.speed *= 0.4; }
-      else car.speed *= 0.5;
+      if (isPlayer) audio.crash();
+      car.speed *= isPlayer ? 0.4 : 0.5;
     }
-    car.x = c.x; car.z = c.z;
+    car.x = c.x;
+    car.z = c.z;
     const cl = clampToWorld(car.x, car.z);
-    if (cl.x !== car.x || cl.z !== car.z) { car.speed *= 0.5; }
-    car.x = cl.x; car.z = cl.z;
+    if (cl.x !== car.x || cl.z !== car.z) car.speed *= 0.5;
+    car.x = cl.x;
+    car.z = cl.z;
     // Car-car bumps.
     for (const other of cars) {
       if (other === car) continue;
-      const dx = other.x - car.x; const dz = other.z - car.z;
+      const dx = other.x - car.x;
+      const dz = other.z - car.z;
       const d2 = dx * dx + dz * dz;
       if (d2 < 12.25 && d2 > 0.01) {
         const d = Math.sqrt(d2);
         const push = (3.5 - d) / 2;
-        const nx = dx / d; const nz = dz / d;
-        car.x -= nx * push; car.z -= nz * push;
-        other.x += nx * push; other.z += nz * push;
+        const nx = dx / d;
+        const nz = dz / d;
+        car.x -= nx * push;
+        car.z -= nz * push;
+        other.x += nx * push;
+        other.z += nz * push;
         const rel = Math.abs(car.speed - other.speed);
         if (rel > 8) {
           if (isPlayer || other === player.inCar) audio.crash();
@@ -702,31 +786,35 @@ export function createGame(audio) {
             other.health -= 25;
             message(`Hit the Verde Coupe (${Math.max(0, other.health)} HP left)`);
             if (other.health <= 0 && !other.disabled) {
-              other.disabled = true; other.speed = 0;
+              other.disabled = true;
+              other.speed = 0;
               state.missionPhase = 'return';
               setBeacon(PLACES.garage.x, PLACES.garage.z, true);
               message('Coupe stopped. Bring the news to the garage.');
             }
           }
           if (other.police && isPlayer) addWanted(1, 'rammed a police car');
-          car.speed *= 0.6; other.speed *= 0.6;
+          car.speed *= 0.6;
+          other.speed *= 0.6;
         }
       }
     }
-    // Running over peds.
+    // Running over pedestrians.
     if (Math.abs(car.speed) > 4) {
       for (const ped of peds) {
         if (ped.down > 0) continue;
         if (dist2(car.x, car.z, ped.x, ped.z) < 3.2) {
-          ped.health = 0; ped.down = 12; ped.state = 'down';
+          ped.health = 0;
+          ped.down = 12;
+          ped.state = 'down';
           if (isPlayer) {
             addWanted(1, 'pedestrian hit');
-            if (ped.rival) { state.missionKills += 1; }
+            if (ped.rival) state.missionKills += 1;
           }
         }
       }
     }
-    // Sync mesh.
+    // Sync the mesh, spin the wheels, flash the light bar.
     car.mesh.position.set(car.x, 0, car.z);
     car.mesh.rotation.y = car.angle;
     const spin = car.speed * dt * 2.4;
@@ -753,27 +841,40 @@ export function createGame(audio) {
       }
       ped.hitCd = Math.max(0, ped.hitCd - dt);
       let speed = ped.speed;
-      let tx = 0; let tz = 0;
+      let tx = 0;
+      let tz = 0;
       if (ped.state === 'flee') {
-        const dx = ped.x - ped.fleeX; const dz = ped.z - ped.fleeZ;
+        const dx = ped.x - ped.fleeX;
+        const dz = ped.z - ped.fleeZ;
         const d = Math.hypot(dx, dz) || 1;
-        tx = dx / d; tz = dz / d; speed = 5.5;
-        if (d > 60) { ped.state = 'walk'; assignRoad(ped); }
+        tx = dx / d;
+        tz = dz / d;
+        speed = 5.5;
+        if (d > 60) {
+          ped.state = 'walk';
+          assignRoad(ped);
+        }
       } else if (ped.state === 'chase' || ped.state === 'rival') {
-        // Police and rivals run at the player.
-        const dx = player.x - ped.x; const dz = player.z - ped.z;
+        // Police and rivals run at the player and hit up close.
+        const dx = player.x - ped.x;
+        const dz = player.z - ped.z;
         const d = Math.hypot(dx, dz) || 1;
-        tx = dx / d; tz = dz / d; speed = ped.police ? 6.5 : 4.2;
+        tx = dx / d;
+        tz = dz / d;
+        speed = ped.police ? 6.5 : 4.2;
         if (d < 1.6 && ped.hitCd <= 0) {
           ped.hitCd = 1.0;
           player.health -= ped.police ? 6 : 9;
           audio.hurt();
           message(ped.police ? 'An officer is beating you down!' : 'Rival hit you!');
-          if (player.health <= 0) { state.mode = 'wasted'; audio.busted(); }
+          if (player.health <= 0) {
+            state.mode = 'wasted';
+            audio.busted();
+          }
         }
       } else if (ped.road) {
-        // Stroll the sidewalk: along a road line, on one side; turn at intersections
-        // with a smooth blend onto the crossing sidewalk (never onto the road).
+        // Stroll the sidewalk: along a road line, on one side; turn at
+        // intersections with a smooth blend onto the crossing sidewalk.
         const r = ped.road;
         const off = STREET / 2 + 1.2;
         const target = r.line + r.side * off;
@@ -794,14 +895,17 @@ export function createGame(audio) {
         ped.walkPhase += dt * speed * 2.2;
         ped.mesh.position.set(ped.x, 0, ped.z);
         ped.mesh.rotation.y = ped.angle;
-        const swing2 = Math.sin(ped.walkPhase) * 0.5;
-        const u2 = ped.mesh.userData;
-        u2.legL.rotation.x = swing2; u2.legR.rotation.x = -swing2;
-        u2.armL.rotation.x = -swing2 * 0.7; u2.armR.rotation.x = swing2 * 0.7;
+        const swing = Math.sin(ped.walkPhase) * 0.5;
+        const u = ped.mesh.userData;
+        u.legL.rotation.x = swing;
+        u.legR.rotation.x = -swing;
+        u.armL.rotation.x = -swing * 0.7;
+        u.armR.rotation.x = swing * 0.7;
         continue;
       } else {
         // Fallback: keep the current heading, turn sometimes.
-        tx = Math.sin(ped.angle); tz = Math.cos(ped.angle);
+        tx = Math.sin(ped.angle);
+        tz = Math.cos(ped.angle);
         if (rng.chance(dt * 0.06)) ped.angle += (rng.next() < 0.5 ? 1 : -1) * Math.PI / 2;
         if (Math.abs(ped.x) > CITY_HALF - 4 || Math.abs(ped.z) > CITY_HALF - 4) ped.angle += Math.PI;
       }
@@ -809,23 +913,29 @@ export function createGame(audio) {
       ped.z += tz * speed * dt;
       ped.angle = Math.atan2(tx, tz);
       const c = collideCircle(city.colliders, ped.x, ped.z, 0.5);
-      ped.x = c.x; ped.z = c.z;
+      ped.x = c.x;
+      ped.z = c.z;
       const cl = clampToWorld(ped.x, ped.z);
-      ped.x = cl.x; ped.z = cl.z;
+      ped.x = cl.x;
+      ped.z = cl.z;
       ped.walkPhase += dt * speed * 2.2;
       ped.mesh.position.set(ped.x, 0, ped.z);
       ped.mesh.rotation.y = ped.angle;
       const swing = Math.sin(ped.walkPhase) * 0.5;
       const u = ped.mesh.userData;
-      u.legL.rotation.x = swing; u.legR.rotation.x = -swing;
-      u.armL.rotation.x = -swing * 0.7; u.armR.rotation.x = swing * 0.7;
-      if (ped.healthBar) ped.healthBar.material.color.setHex(ped.health > 30 ? 0x37d67a : 0xe8b400);
-      if (ped.healthBar) ped.healthBar.scale.x = 1.6 * Math.max(0, ped.health / 60);
+      u.legL.rotation.x = swing;
+      u.legR.rotation.x = -swing;
+      u.armL.rotation.x = -swing * 0.7;
+      u.armR.rotation.x = swing * 0.7;
+      if (ped.healthBar) {
+        ped.healthBar.material.color.setHex(ped.health > 30 ? 0x37d67a : 0xe8b400);
+        ped.healthBar.scale.x = 1.6 * Math.max(0, ped.health / 60);
+      }
     }
   }
 
   function stepWanted(dt) {
-    // Keep the heat honest: spawn the cops the stars call for.
+    // Spawn the cops the stars call for.
     const wantCars = Math.min(state.wanted, 4);
     policeSpawnTimer -= dt;
     if (state.wanted > 0 && policeCars.length < wantCars && policeSpawnTimer <= 0) {
@@ -849,7 +959,7 @@ export function createGame(audio) {
       }
     }
     audio.setSiren(state.wanted > 0);
-    // Bust checks.
+    // Bust checks: a cop holding close long enough takes you in.
     if (state.wanted > 0) {
       const px = player.inCar ? player.inCar.x : player.x;
       const pz = player.inCar ? player.inCar.z : player.z;
@@ -865,7 +975,9 @@ export function createGame(audio) {
           state.bustedReason = 'The Verde PD took you in.';
           audio.busted();
         }
-      } else state.bustHold = 0;
+      } else {
+        state.bustHold = 0;
+      }
     }
   }
 
@@ -899,8 +1011,11 @@ export function createGame(audio) {
         completeMission();
       }
     } else if (m.kind === 'ram-target') {
-      if (state.missionPhase === 'return' && dist2(player.x, player.z, PLACES.garage.x, PLACES.garage.z) < 100) completeMission();
-      if (state.missionPhase === 'return' && player.inCar && dist2(player.inCar.x, player.inCar.z, PLACES.garage.x, PLACES.garage.z) < 100) completeMission();
+      if (state.missionPhase === 'return') {
+        const dx = player.inCar ? player.inCar.x : player.x;
+        const dz = player.inCar ? player.inCar.z : player.z;
+        if (dist2(dx, dz, PLACES.garage.x, PLACES.garage.z) < 100) completeMission();
+      }
     }
   }
 
@@ -914,30 +1029,60 @@ export function createGame(audio) {
     }
   }
 
-  // --- public API -------------------------------------------------------------------
+  // --- public API ----------------------------------------------------------------------
   function reset(seed = 1337) {
     // A fresh world: used by the title screen and by ?shot= staging.
-    for (const car of [...policeCars]) { worldGroup.remove(car.mesh); cars.splice(cars.indexOf(car), 1); }
+    for (const car of [...policeCars]) {
+      worldGroup.remove(car.mesh);
+      cars.splice(cars.indexOf(car), 1);
+    }
     policeCars.length = 0;
-    for (const p of [...policePeds]) { worldGroup.remove(p.mesh); peds.splice(peds.indexOf(p), 1); }
+    for (const p of [...policePeds]) {
+      worldGroup.remove(p.mesh);
+      peds.splice(peds.indexOf(p), 1);
+    }
     policePeds.length = 0;
-    for (const r of [...rivals]) { worldGroup.remove(r.mesh); peds.splice(peds.indexOf(r), 1); }
+    for (const r of [...rivals]) {
+      worldGroup.remove(r.mesh);
+      peds.splice(peds.indexOf(r), 1);
+    }
     rivals.length = 0;
-    if (targetCar) { worldGroup.remove(targetCar.mesh); cars.splice(cars.indexOf(targetCar), 1); targetCar = null; }
-    state.time = 0; state.wanted = 0; state.wantedTimer = 0;
-    state.health = PLAYER.health; player.health = PLAYER.health;
-    state.ammo = PLAYER.magSize; state.reloading = 0;
+    if (targetCar) {
+      worldGroup.remove(targetCar.mesh);
+      cars.splice(cars.indexOf(targetCar), 1);
+      targetCar = null;
+    }
+    state.time = 0;
+    state.wanted = 0;
+    state.wantedTimer = 0;
+    state.health = PLAYER.health;
+    player.health = PLAYER.health;
+    state.ammo = PLAYER.magSize;
+    state.reloading = 0;
     state.messages = [];
-    state.missionIndex = 0; state.missionPhase = 'idle'; state.missionTimer = 0; state.missionKills = 0;
-    player.x = PLACES.garage.x - 4; player.z = PLACES.garage.z + 6; player.y = 0;
-    player.vx = 0; player.vz = 0; player.vy = 0; player.angle = Math.PI;
-    player.inCar = null; playerMesh.visible = true;
+    state.missionIndex = 0;
+    state.missionPhase = 'idle';
+    state.missionTimer = 0;
+    state.missionKills = 0;
+    player.x = PLACES.garage.x - 4;
+    player.z = PLACES.garage.z + 6;
+    player.y = 0;
+    player.vx = 0;
+    player.vz = 0;
+    player.vy = 0;
+    player.angle = Math.PI;
+    player.inCar = null;
+    playerMesh.visible = true;
     for (const car of cars) {
-      car.speed = 0; car.health = 100; car.disabled = false;
+      car.speed = 0;
+      car.health = 100;
+      car.disabled = false;
       if (car.traffic) car.traffic.speed = CAR.trafficSpeed;
     }
     for (const ped of peds) {
-      ped.health = 100; ped.down = 0; ped.state = ped.police ? 'chase' : 'walk';
+      ped.health = 100;
+      ped.down = 0;
+      ped.state = ped.police ? 'chase' : 'walk';
       ped.mesh.rotation.x = 0;
     }
     setBeacon(0, 0, false);
@@ -962,7 +1107,7 @@ export function createGame(audio) {
   function step(dt, input) {
     if (state.mode !== 'play') return;
     state.time += dt;
-    // Actions (edge-triggered by the caller).
+    // Edge-triggered actions, consumed here by the caller resetting them.
     if (input.enter) {
       if (player.inCar) exitCar();
       else {
@@ -971,7 +1116,7 @@ export function createGame(audio) {
       }
     }
     if (input.punch) punch();
-    if (input.reload && state.reloading <= 0 && state.ammo < PLAYER.magSize) { state.reloading = PLAYER.reloadTime; }
+    if (input.reload && state.reloading <= 0 && state.ammo < PLAYER.magSize) state.reloading = PLAYER.reloadTime;
     if (input.shoot && input.camPos && input.camDir) shoot(input.camPos, input.camDir);
 
     stepPlayer(dt, input);
@@ -993,9 +1138,14 @@ export function createGame(audio) {
     playerMesh.rotation.y = player.angle;
     const swing = Math.sin(player.walkPhase) * (player.moving ? 0.55 : 0);
     const u = playerMesh.userData;
-    u.legL.rotation.x = swing; u.legR.rotation.x = -swing;
-    u.armL.rotation.x = -swing * 0.7; u.armR.rotation.x = swing * 0.7;
-    if (state.health <= 0 && state.mode === 'play') { state.mode = 'wasted'; audio.busted(); }
+    u.legL.rotation.x = swing;
+    u.legR.rotation.x = -swing;
+    u.armL.rotation.x = -swing * 0.7;
+    u.armR.rotation.x = swing * 0.7;
+    if (state.health <= 0 && state.mode === 'play') {
+      state.mode = 'wasted';
+      audio.busted();
+    }
     state.health = player.health;
   }
 
@@ -1003,7 +1153,9 @@ export function createGame(audio) {
     const m = currentMission();
     if (!m) return 'Story complete — free roam. Porto Verde is yours.';
     let extra = '';
-    if (m.kind === 'timed-deliver' && state.missionPhase === 'deliver') extra = ` — ${Math.max(0, Math.ceil(state.missionTimer))}s left`;
+    if (m.kind === 'timed-deliver' && state.missionPhase === 'deliver') {
+      extra = ` — ${Math.max(0, Math.ceil(state.missionTimer))}s left`;
+    }
     if (m.kind === 'defeat' && state.missionPhase === 'fight') extra = ` — ${state.missionKills}/3 down`;
     if (beaconPos.active) {
       const px = player.inCar ? player.inCar.x : player.x;

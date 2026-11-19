@@ -1,19 +1,17 @@
-// Porto Verde — configuration, story and mission data.
-// Everything here is original fiction: a made-up city, made-up people, made-up places.
+// Porto Verde — tuning, story and mission data.
+// All names, people and places are original fiction for this game.
 
 export const GAME_TITLE = 'PORTO VERDE';
 export const GAME_SUBTITLE = 'An open-world crime story — an original game, not affiliated with Rockstar Games';
 export const SAVE_KEY = 'portoverde.save.v1';
 
-// --- city layout -------------------------------------------------------------
-export const BLOCK = 60;          // building block size (metres)
-export const STREET = 14;         // street width
-export const GRID = 6;            // blocks per side
+// --- city geometry -----------------------------------------------------------
+export const BLOCK = 60;            // building block, metres per side
+export const STREET = 14;           // street width
+export const GRID = 6;              // blocks per side
 export const PITCH = BLOCK + STREET;
-export const CITY_HALF = (GRID * PITCH + STREET) / 2; // ~229
-
-// Seeded city: the same seed always builds the same Porto Verde.
-export const CITY_SEED = 20261119;
+export const CITY_HALF = (GRID * PITCH + STREET) / 2; // 229
+export const CITY_SEED = 20261119;  // same seed -> same city, every load
 
 // --- player ------------------------------------------------------------------
 export const PLAYER = {
@@ -35,7 +33,7 @@ export const PLAYER = {
 
 // --- cars --------------------------------------------------------------------
 export const CAR = {
-  maxSpeed: 42,          // m/s (~150 km/h)
+  maxSpeed: 42,          // m/s, about 150 km/h
   accel: 16,
   brake: 30,
   reverseMax: 10,
@@ -46,8 +44,8 @@ export const CAR = {
 // --- police / wanted -----------------------------------------------------------
 export const WANTED = {
   max: 5,
-  decaySeconds: 28,      // one star fades after this long with no crime and no cop nearby
-  bustHoldSeconds: 1.6,  // a cop must stay this close this long to bust you on foot
+  decaySeconds: 28,      // one star fades after this long quiet, unseen
+  bustHoldSeconds: 1.6,  // a cop must hold this close this long to bust you on foot
   bustCarHoldSeconds: 2.2,
 };
 
@@ -58,7 +56,7 @@ export const STORY = [
   'to take — on foot or behind the wheel — if the Verde PD doesn\'t take you first.',
 ];
 
-// Missions run in order. Each has a kind, a target, a reward and the line the game shows.
+// Missions run in order: steal, timed delivery, lose the heat, fight, ram.
 export const MISSIONS = [
   {
     id: 'wheels-up',
@@ -104,7 +102,7 @@ export const MISSIONS = [
   },
 ];
 
-// --- places -------------------------------------------------------------------
+// --- landmark positions ---------------------------------------------------------
 export const PLACES = {
   garage: { x: -PITCH * 2 - STREET / 2, z: PITCH * 2 + STREET / 2, label: 'Marlow Garage' },
   marlinClub: { x: PITCH * 2 + STREET / 2, z: -PITCH * 2 - STREET / 2, label: 'Marlin Club' },
@@ -113,7 +111,7 @@ export const PLACES = {
   hospital: { x: PITCH * 2 + STREET / 2, z: PITCH * 2 + STREET / 2, label: 'St. Verde Hospital' },
 };
 
-// --- colours ------------------------------------------------------------------
+// --- palette -------------------------------------------------------------------
 export const COLORS = {
   sky: 0x87b5d6,
   fog: 0x9db8c8,
@@ -128,7 +126,7 @@ export const COLORS = {
   police: 0x1c2f57,
 };
 
-// Car paint jobs the city spawns with (name shown when you steal one).
+// Paint jobs for the cars the city spawns (name is shown when you take one).
 export const CAR_NAMES = [
   ['Vento S', 0x8a1f1f], ['Cometa GT', 0x1f4d8a], ['Lobo Pickup', 0x3a3f45],
   ['Brisa', 0x7a8a99], ['Tornado', 0xd8a020], ['Falcão', 0x2f6b3a],

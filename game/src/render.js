@@ -1,7 +1,7 @@
 // Renderer: the three.js scene, the chase cameras, the HUD, the live minimap
 // and the title / pause / busted / wasted screens. The simulation owns the world.
 import * as THREE from 'three';
-import { BLOCK, CITY_HALF, COLORS, GAME_SUBTITLE, GAME_TITLE, MISSIONS, PLAYER, STORY } from './config.js';
+import { CITY_HALF, COLORS, GAME_SUBTITLE, GAME_TITLE, MISSIONS, PLAYER, STORY } from './config.js';
 
 const TAU = Math.PI * 2;
 
@@ -27,26 +27,28 @@ export function createRenderer(game) {
   sun.position.set(120, 180, 60);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
-  sun.shadow.camera.left = -260; sun.shadow.camera.right = 260;
-  sun.shadow.camera.top = 260; sun.shadow.camera.bottom = -260;
+  sun.shadow.camera.left = -260;
+  sun.shadow.camera.right = 260;
+  sun.shadow.camera.top = 260;
+  sun.shadow.camera.bottom = -260;
   sun.shadow.camera.far = 600;
   scene.add(sun);
   scene.add(new THREE.HemisphereLight(0xbfd9e8, 0x5a5a48, 1.1));
 
-  // --- camera rig -------------------------------------------------------------------
+  // --- chase camera -----------------------------------------------------------------
   const camState = { yaw: 0, pitch: 0.22, dist: 11, height: 4.5, shake: 0 };
   const camTarget = new THREE.Vector3();
   const camPos = new THREE.Vector3();
 
   function updateCamera(dt) {
     const p = game.player;
-    const focus = p.inCar || null;
-    const fx = focus ? focus.x : p.x;
-    const fz = focus ? focus.z : p.z;
-    const fy = focus ? 1.2 : p.y + 1.6;
+    const car = p.inCar || null;
+    const fx = car ? car.x : p.x;
+    const fz = car ? car.z : p.z;
+    const fy = car ? 1.2 : p.y + 1.6;
     camTarget.set(fx, fy, fz);
-    const d = camState.dist + (focus ? 3 : 0);
-    const h = camState.height + (focus ? 1.5 : 0);
+    const d = camState.dist + (car ? 3 : 0);
+    const h = camState.height + (car ? 1.5 : 0);
     camPos.set(
       fx + Math.sin(camState.yaw) * Math.cos(camState.pitch) * d,
       fy + h + Math.sin(camState.pitch) * d * 0.6,
@@ -62,9 +64,9 @@ export function createRenderer(game) {
     camera.lookAt(camTarget);
   }
 
-  // --- HUD ----------------------------------------------------------------------------
+  // --- HUD -----------------------------------------------------------------------------
   const hud = document.getElementById('hud');
-  const hudHTML = `
+  hud.innerHTML = `
     <div id="hud-top-left">
       <div id="hud-cash">$0</div>
       <div id="hud-stars"></div>
@@ -83,7 +85,6 @@ export function createRenderer(game) {
     <div id="hud-damage"></div>
     <div id="hud-controls">WASD move &nbsp;·&nbsp; Shift run &nbsp;·&nbsp; Space jump &nbsp;·&nbsp; E enter/exit car &nbsp;·&nbsp; F punch &nbsp;·&nbsp; Click shoot &nbsp;·&nbsp; R reload &nbsp;·&nbsp; P pause</div>
   `;
-  hud.innerHTML = hudHTML;
   const el = {
     cash: document.getElementById('hud-cash'),
     stars: document.getElementById('hud-stars'),
@@ -103,16 +104,21 @@ export function createRenderer(game) {
 
   function drawMinimap() {
     const s = game.state;
-    const w = 180; const half = CITY_HALF;
+    const w = 180;
+    const half = CITY_HALF;
     const px = game.player.inCar ? game.player.inCar.x : game.player.x;
     const pz = game.player.inCar ? game.player.inCar.z : game.player.z;
     mm.clearRect(0, 0, w, w);
     mm.fillStyle = 'rgba(12,16,22,0.78)';
-    mm.beginPath(); mm.arc(w / 2, w / 2, w / 2, 0, TAU); mm.fill();
+    mm.beginPath();
+    mm.arc(w / 2, w / 2, w / 2, 0, TAU);
+    mm.fill();
     mm.save();
-    mm.beginPath(); mm.arc(w / 2, w / 2, w / 2 - 2, 0, TAU); mm.clip();
+    mm.beginPath();
+    mm.arc(w / 2, w / 2, w / 2 - 2, 0, TAU);
+    mm.clip();
     const toMap = (x, z) => [w / 2 + (x / half) * (w / 2 - 4), w / 2 + (z / half) * (w / 2 - 4)];
-    // Sea + beach.
+    // Sea + beach at the south edge.
     mm.fillStyle = '#2e6f8e';
     mm.fillRect(0, w / 2 + (CITY_HALF / half) * (w / 2 - 4), w, w);
     mm.fillStyle = '#d9c28a';
@@ -122,24 +128,28 @@ export function createRenderer(game) {
     const [gx, gy] = toMap(-half, -half);
     mm.fillRect(gx, gy, (2 * half / half) * (w / 2 - 4), (2 * half / half) * (w / 2 - 4));
     // Roads.
-    mm.strokeStyle = '#565d68'; mm.lineWidth = 3;
+    mm.strokeStyle = '#565d68';
+    mm.lineWidth = 3;
     for (const line of game.city.roadLines) {
-      const [ax, ay] = toMap(line, -half); const [bx, by] = toMap(line, half);
+      const [ax, ay] = toMap(line, -half);
+      const [bx, by] = toMap(line, half);
       mm.beginPath(); mm.moveTo(ax, ay); mm.lineTo(bx, by); mm.stroke();
-      const [cx, cy] = toMap(-half, line); const [dx, dy] = toMap(half, line);
+      const [cx, cy] = toMap(-half, line);
+      const [dx, dy] = toMap(half, line);
       mm.beginPath(); mm.moveTo(cx, cy); mm.lineTo(dx, dy); mm.stroke();
     }
     // Plaza.
     mm.fillStyle = '#4a7a4a';
     const [plx, ply] = toMap(37 - 30, 37 - 30);
-    mm.fillRect(plx, ply, 60 / half * (w / 2 - 4), 60 / half * (w / 2 - 4));
-    // Beacon blip.
+    mm.fillRect(plx, ply, (60 / half) * (w / 2 - 4), (60 / half) * (w / 2 - 4));
+    // Mission beacon blip.
     if (game.beaconPos.active) {
       const [bx2, by2] = toMap(game.beaconPos.x, game.beaconPos.z);
       const pulse = 6 + Math.sin(s.time * 5) * 2;
       mm.fillStyle = '#ffd34d';
       mm.beginPath(); mm.arc(bx2, by2, pulse, 0, TAU); mm.fill();
-      mm.strokeStyle = '#fff'; mm.lineWidth = 1.5;
+      mm.strokeStyle = '#fff';
+      mm.lineWidth = 1.5;
       mm.beginPath(); mm.arc(bx2, by2, pulse + 3, 0, TAU); mm.stroke();
     }
     // Police blips.
@@ -155,20 +165,26 @@ export function createRenderer(game) {
       const [rx, ry] = toMap(r.x, r.z);
       mm.beginPath(); mm.arc(rx, ry, 3, 0, TAU); mm.fill();
     }
-    // Player arrow (points along the camera yaw, so "up" on the map is "forward").
+    // Player arrow (map "up" is camera forward).
     const [ux, uy] = toMap(px, pz);
     const ang = -camState.yaw + Math.PI;
     mm.save();
-    mm.translate(ux, uy); mm.rotate(ang);
+    mm.translate(ux, uy);
+    mm.rotate(ang);
     mm.fillStyle = '#ffffff';
-    mm.beginPath(); mm.moveTo(0, -7); mm.lineTo(5, 6); mm.lineTo(0, 3); mm.lineTo(-5, 6); mm.closePath(); mm.fill();
+    mm.beginPath();
+    mm.moveTo(0, -7); mm.lineTo(5, 6); mm.lineTo(0, 3); mm.lineTo(-5, 6);
+    mm.closePath();
+    mm.fill();
     mm.restore();
     mm.restore();
-    // Rim.
-    mm.strokeStyle = 'rgba(255,255,255,0.35)'; mm.lineWidth = 2;
+    // Rim + north marker.
+    mm.strokeStyle = 'rgba(255,255,255,0.35)';
+    mm.lineWidth = 2;
     mm.beginPath(); mm.arc(w / 2, w / 2, w / 2 - 1, 0, TAU); mm.stroke();
-    // North marker.
-    mm.fillStyle = '#ffffff'; mm.font = 'bold 11px sans-serif'; mm.textAlign = 'center';
+    mm.fillStyle = '#ffffff';
+    mm.font = 'bold 11px sans-serif';
+    mm.textAlign = 'center';
     mm.fillText('N', w / 2, 12);
   }
 
@@ -197,22 +213,28 @@ export function createRenderer(game) {
     if (el.messages.innerHTML !== msgs) el.messages.innerHTML = msgs;
     el.crosshair.style.display = (!car && s.mode === 'play') ? 'block' : 'none';
     el.vignette.style.opacity = s.wanted > 0 ? String(0.12 + s.wanted * 0.05) : '0';
-    el.damage.style.opacity = p.health < 100 ? String(Math.min(0.7, (100 - p.health) / 100 * 0.9)) : '0';
+    el.damage.style.opacity = p.health < 100 ? String(Math.min(0.7, ((100 - p.health) / 100) * 0.9)) : '0';
     drawMinimap();
   }
 
   // --- screens ------------------------------------------------------------------------
   const screen = document.getElementById('screen');
-  function showScreen(html) { screen.innerHTML = html; screen.style.display = 'flex'; }
-  function hideScreen() { screen.style.display = 'none'; screen.innerHTML = ''; }
+  function showScreen(html) {
+    screen.innerHTML = html;
+    screen.style.display = 'flex';
+  }
+  function hideScreen() {
+    screen.style.display = 'none';
+    screen.innerHTML = '';
+  }
 
   function showTitle() {
     const save = game.loadGame();
-    const savedLine = save && (save.cash > 0 || save.missionIndex > 0)
+    const hasSave = save && (save.cash > 0 || save.missionIndex > 0);
+    const savedLine = hasSave
       ? `<p class="save-line">Save found — $${(save.cash || 0).toLocaleString('en-US')} · Mission ${Math.min((save.missionIndex || 0) + 1, MISSIONS.length)} of ${MISSIONS.length}</p>`
       : '';
-    const continueBtn = save && (save.cash > 0 || save.missionIndex > 0)
-      ? '<button id="btn-continue" class="menu-btn">CONTINUE</button>' : '';
+    const continueBtn = hasSave ? '<button id="btn-continue" class="menu-btn">CONTINUE</button>' : '';
     showScreen(`
       <div class="panel">
         <h1>${GAME_TITLE}</h1>

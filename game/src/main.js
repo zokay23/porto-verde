@@ -19,8 +19,8 @@ const input = {
   camYaw: 0, camPos: null, camDir: null,
 };
 
+// Aim from the camera through the centre of the screen.
 function readMouse() {
-  // Aim from the camera through the screen centre.
   const v = new THREE.Vector3(0, 0, -1).applyQuaternion(renderer.camera.quaternion);
   const p = renderer.camera.position;
   input.camPos = { x: p.x, y: p.y, z: p.z };
@@ -66,17 +66,23 @@ window.addEventListener('mouseup', (e) => {
   if (e.button === 0) input.shoot = false;
 });
 
-// Drag to orbit the camera.
+// Right/middle-drag orbits the camera.
 let dragging = false;
-let lastX = 0; let lastY = 0;
+let lastX = 0;
+let lastY = 0;
 window.addEventListener('mousedown', (e) => {
-  if (e.button === 2 || e.button === 1) { dragging = true; lastX = e.clientX; lastY = e.clientY; }
+  if (e.button === 2 || e.button === 1) {
+    dragging = true;
+    lastX = e.clientX;
+    lastY = e.clientY;
+  }
 });
 window.addEventListener('mousemove', (e) => {
   if (!dragging) return;
   renderer.camState.yaw -= (e.clientX - lastX) * 0.005;
   renderer.camState.pitch = Math.max(-0.1, Math.min(0.7, renderer.camState.pitch + (e.clientY - lastY) * 0.004));
-  lastX = e.clientX; lastY = e.clientY;
+  lastX = e.clientX;
+  lastY = e.clientY;
 });
 window.addEventListener('mouseup', () => { dragging = false; });
 window.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -88,18 +94,17 @@ document.getElementById('game').addEventListener('click', () => {
   }
 });
 document.addEventListener('pointerlockchange', () => {
-  if (document.pointerLockElement) {
-    const onMove = (e) => {
-      renderer.camState.yaw -= e.movementX * 0.003;
-      renderer.camState.pitch = Math.max(-0.1, Math.min(0.7, renderer.camState.pitch + e.movementY * 0.002));
-    };
-    document.addEventListener('mousemove', onMove);
-    const off = () => {
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('pointerlockchange', off);
-    };
-    document.addEventListener('pointerlockchange', off);
-  }
+  if (!document.pointerLockElement) return;
+  const onMove = (e) => {
+    renderer.camState.yaw -= e.movementX * 0.003;
+    renderer.camState.pitch = Math.max(-0.1, Math.min(0.7, renderer.camState.pitch + e.movementY * 0.002));
+  };
+  document.addEventListener('mousemove', onMove);
+  const off = () => {
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('pointerlockchange', off);
+  };
+  document.addEventListener('pointerlockchange', off);
 });
 
 function pauseGame() {
