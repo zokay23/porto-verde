@@ -4,7 +4,6 @@
 export const GAME_TITLE = 'PORTO VERDE';
 export const GAME_SUBTITLE = 'An open-world crime story — an original game, not affiliated with Rockstar Games';
 export const SAVE_KEY = 'portoverde.save.v1';
-export const BEST_KEY = 'portoverde.best.v1';
 
 // --- city layout -------------------------------------------------------------
 export const BLOCK = 60;          // building block size (metres)
@@ -12,7 +11,6 @@ export const STREET = 14;         // street width
 export const GRID = 6;            // blocks per side
 export const PITCH = BLOCK + STREET;
 export const CITY_HALF = (GRID * PITCH + STREET) / 2; // ~229
-export const ROAD_Y = 0.02;
 
 // Seeded city: the same seed always builds the same Porto Verde.
 export const CITY_SEED = 20261119;
@@ -21,11 +19,9 @@ export const CITY_SEED = 20261119;
 export const PLAYER = {
   walkSpeed: 6,
   runSpeed: 10,
-  accel: 40,
   jumpSpeed: 8,
   gravity: 22,
   radius: 0.55,
-  height: 1.8,
   health: 100,
   punchDamage: 25,
   punchRange: 2.2,
@@ -43,8 +39,7 @@ export const CAR = {
   accel: 16,
   brake: 30,
   reverseMax: 10,
-  steer: 0.55,           // max steer angle at low speed
-  grip: 8,
+  steer: 0.55,
   trafficSpeed: 9,
 };
 
@@ -131,7 +126,6 @@ export const COLORS = {
   grass: 0x5d8a4a,
   building: [0xb8a88f, 0x9aa3ad, 0xc2b49a, 0x8d99a8, 0xa89a86, 0x7e8b99],
   police: 0x1c2f57,
-  taxi: 0xe8b400,
 };
 
 // Car paint jobs the city spawns with (name shown when you steal one).

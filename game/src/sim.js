@@ -32,7 +32,7 @@ export function createGame(audio) {
   const worldGroup = new THREE.Group();
   worldGroup.add(city.group);
 
-  // --- shared helpers ---------------------------------------------------------
+  // --- shared state -------------------------------------------------------------
   const state = {
     mode: 'title', // title | play | paused | busted | wasted
     time: 0,
@@ -58,6 +58,7 @@ export function createGame(audio) {
     walkPhase: 0, moving: false,
   };
 
+  // Mission beacon: a light column + ring on the ground.
   const beacon = new THREE.Group();
   const beaconMat = new THREE.MeshBasicMaterial({ color: 0xffd34d, transparent: true, opacity: 0.35, side: THREE.DoubleSide, depthWrite: false });
   const beaconCyl = new THREE.Mesh(new THREE.CylinderGeometry(3, 3, 40, 16, 1, true), beaconMat);
@@ -98,8 +99,7 @@ export function createGame(audio) {
 
   function buildCarMesh(color, isPolice) {
     const g = new THREE.Group();
-    const bodyMat = new THREE.MeshLambertMaterial({ color });
-    const body = new THREE.Mesh(carBodyGeo, bodyMat);
+    const body = new THREE.Mesh(carBodyGeo, new THREE.MeshLambertMaterial({ color }));
     body.position.y = 0.55; body.castShadow = true;
     g.add(body);
     const cabin = new THREE.Mesh(carCabinGeo, new THREE.MeshLambertMaterial({ color: 0x1a2028 }));
@@ -115,11 +115,12 @@ export function createGame(audio) {
       g.add(w); wheels.push(w);
     }
     const headMat = new THREE.MeshLambertMaterial({ color: 0xfff2b0, emissive: 0xffedb0, emissiveIntensity: 0.6 });
+    const tailMat = new THREE.MeshLambertMaterial({ color: 0xaa1111, emissive: 0x661111, emissiveIntensity: 0.5 });
     for (const s of [-1, 1]) {
       const h = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.18, 0.1), headMat);
       h.position.set(s * 0.6, 0.6, 2.12);
       g.add(h);
-      const t = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.18, 0.1), new THREE.MeshLambertMaterial({ color: 0xaa1111, emissive: 0x661111, emissiveIntensity: 0.5 }));
+      const t = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.18, 0.1), tailMat);
       t.position.set(s * 0.6, 0.6, -2.12);
       g.add(t);
     }
@@ -138,14 +139,14 @@ export function createGame(audio) {
   }
 
   function addCar(x, z, angle, opts = {}) {
-    const [name, color] = opts.name ? [opts.name, opts.color] : CAR_NAMES[Math.floor(rng.next() * CAR_NAMES.length)];
-    const built = buildCarMesh(color, !!opts.police);
+    const picked = opts.name ? [opts.name, opts.color] : CAR_NAMES[Math.floor(rng.next() * CAR_NAMES.length)];
+    const built = buildCarMesh(picked[1], !!opts.police);
     built.group.position.set(x, 0, z);
     built.group.rotation.y = angle;
     worldGroup.add(built.group);
     const car = {
-      x, z, angle, speed: 0, steer: 0, health: 100,
-      name, color, mesh: built.group, wheels: built.wheels,
+      x, z, angle, speed: 0, health: 100,
+      name: picked[0], color: picked[1], mesh: built.group, wheels: built.wheels,
       parked: !!opts.parked, police: !!opts.police, target: !!opts.target,
       traffic: opts.traffic || null, disabled: false, smoke: 0,
     };
@@ -248,7 +249,7 @@ export function createGame(audio) {
     pickups.push({ x: s.x, z: s.z, mesh: g, respawn: 0 });
   }
 
-  // --- tracers / impacts ---------------------------------------------------------------
+  // --- tracers ------------------------------------------------------------------------
   const tracers = [];
   const tracerMat = new THREE.MeshBasicMaterial({ color: 0xffe9a8 });
   function spawnTracer(from, to) {
@@ -404,7 +405,6 @@ export function createGame(audio) {
     // Buildings (AABB slab test, coarse).
     for (const b of city.colliders) {
       if (origin.x > b.minX && origin.x < b.maxX && origin.z > b.minZ && origin.z < b.maxZ) continue;
-      // Ray vs expanded box in 2D (x,z), height ignored for walls up to 30m.
       let tmin = 0; let tmax = maxDist;
       const o = [origin.x, origin.z]; const d = [dir.x, dir.z];
       const mn = [b.minX, b.minZ]; const mx = [b.maxX, b.maxZ];
@@ -472,7 +472,7 @@ export function createGame(audio) {
     audio.punch();
     const fx = Math.sin(player.angle); const fz = Math.cos(player.angle);
     for (const ped of peds) {
-      if (ped.down > 0 || ped === player) continue;
+      if (ped.down > 0) continue;
       const dx = ped.x - player.x; const dz = ped.z - player.z;
       const d = Math.hypot(dx, dz);
       if (d < PLAYER.punchRange && (dx * fx + dz * fz) / Math.max(d, 0.01) > 0.3) {
@@ -673,7 +673,6 @@ export function createGame(audio) {
       car.angle = t.axis === 'x' ? (t.dir > 0 ? Math.PI / 2 : -Math.PI / 2) : (t.dir > 0 ? 0 : Math.PI);
     }
     const fx = Math.sin(car.angle); const fz = Math.cos(car.angle);
-    const ox = car.x; const oz = car.z;
     car.x += fx * car.speed * dt;
     car.z += fz * car.speed * dt;
     const c = collideCircle(city.colliders, car.x, car.z, 1.7);

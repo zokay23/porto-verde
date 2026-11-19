@@ -1,4 +1,4 @@
-// Seeded random: the same seed always gives the same city, traffic and shots.
+// Seeded random: the same seed always builds the same city, traffic and shots.
 export function createRandom(seed) {
   let a = seed >>> 0;
   return {

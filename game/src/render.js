@@ -1,23 +1,17 @@
-// Rendering: the three.js scene, the chase/orbit camera, lighting, sky and the HUD
-// (DOM overlay + 2D minimap). The simulation owns the world; this module draws it.
+// Renderer: the three.js scene, the chase cameras, the HUD, the live minimap
+// and the title / pause / busted / wasted screens. The simulation owns the world.
 import * as THREE from 'three';
-import { CITY_HALF, COLORS, PITCH } from './config.js';
+import { BLOCK, CITY_HALF, COLORS, GAME_SUBTITLE, GAME_TITLE, MISSIONS, PLAYER, STORY } from './config.js';
 
 const TAU = Math.PI * 2;
 
-function angleLerp(a, b, t) {
-  let d = (b - a) % TAU;
-  if (d > Math.PI) d -= TAU;
-  if (d < -Math.PI) d += TAU;
-  return a + d * t;
-}
-
-export function createRenderer(canvas, game) {
+export function createRenderer(game) {
+  const canvas = document.getElementById('game');
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-  renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.05;
 
@@ -26,218 +20,264 @@ export function createRenderer(canvas, game) {
   scene.fog = new THREE.Fog(COLORS.fog, 120, 420);
   scene.add(game.worldGroup);
 
-  const camera = new THREE.PerspectiveCamera(62, 1, 0.1, 900);
+  const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 1200);
+  camera.position.set(0, 6, 14);
 
-  const hemi = new THREE.HemisphereLight(0xbfd9ff, 0x8a7a5a, 1.15);
-  scene.add(hemi);
-  const sun = new THREE.DirectionalLight(COLORS.sun, 2.4);
+  const sun = new THREE.DirectionalLight(COLORS.sun, 2.6);
+  sun.position.set(120, 180, 60);
   sun.castShadow = true;
-  sun.shadow.mapSize.set(1024, 1024);
-  sun.shadow.camera.left = -70; sun.shadow.camera.right = 70;
-  sun.shadow.camera.top = 70; sun.shadow.camera.bottom = -70;
-  sun.shadow.camera.near = 10; sun.shadow.camera.far = 300;
-  sun.shadow.bias = -0.0008;
+  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.camera.left = -260; sun.shadow.camera.right = 260;
+  sun.shadow.camera.top = 260; sun.shadow.camera.bottom = -260;
+  sun.shadow.camera.far = 600;
   scene.add(sun);
-  scene.add(sun.target);
+  scene.add(new THREE.HemisphereLight(0xbfd9e8, 0x5a5a48, 1.1));
 
-  // Drifting clouds: flat white blobs, cheap and pretty.
-  const clouds = [];
-  const cloudMat = new THREE.MeshLambertMaterial({ color: 0xffffff, transparent: true, opacity: 0.85 });
-  for (let i = 0; i < 9; i += 1) {
-    const g = new THREE.Group();
-    for (let j = 0; j < 3; j += 1) {
-      const s = new THREE.Mesh(new THREE.SphereGeometry(6 + Math.random() * 6, 8, 6), cloudMat);
-      s.scale.y = 0.35;
-      s.position.set(j * 8 - 8, 0, (Math.random() - 0.5) * 6);
-      g.add(s);
-    }
-    g.position.set((Math.random() - 0.5) * 500, 70 + Math.random() * 30, (Math.random() - 0.5) * 500);
-    scene.add(g);
-    clouds.push(g);
-  }
+  // --- camera rig -------------------------------------------------------------------
+  const camState = { yaw: 0, pitch: 0.22, dist: 11, height: 4.5, shake: 0 };
+  const camTarget = new THREE.Vector3();
+  const camPos = new THREE.Vector3();
 
-  // --- camera state -------------------------------------------------------------
-  const cam = {
-    yaw: Math.PI, pitch: 0.32, dist: 8,
-    manualUntil: 0, shot: null,
-  };
-
-  function applyDrag(dx, dy) {
-    cam.yaw -= dx * 0.005;
-    cam.pitch = Math.max(0.06, Math.min(1.15, cam.pitch + dy * 0.004));
-    cam.manualUntil = performance.now() / 1000 + 2.5;
-  }
-
-  function setShotCamera(yaw, pitch, dist, target) {
-    cam.shot = { yaw, pitch, dist, target };
-  }
-  function clearShotCamera() { cam.shot = null; }
-
-  function updateCamera(dt, time) {
+  function updateCamera(dt) {
     const p = game.player;
-    const inCar = p.inCar;
-    let target = { x: p.x, y: p.y + 1.6, z: p.z };
-    if (cam.shot) {
-      const s = cam.shot;
-      const cx = s.target.x + Math.sin(s.yaw) * Math.cos(s.pitch) * s.dist;
-      const cy = s.target.y + Math.sin(s.pitch) * s.dist;
-      const cz = s.target.z + Math.cos(s.yaw) * Math.cos(s.pitch) * s.dist;
-      camera.position.set(cx, cy, cz);
-      camera.lookAt(s.target.x, s.target.y, s.target.z);
-      return;
+    const focus = p.inCar || null;
+    const fx = focus ? focus.x : p.x;
+    const fz = focus ? focus.z : p.z;
+    const fy = focus ? 1.2 : p.y + 1.6;
+    camTarget.set(fx, fy, fz);
+    const d = camState.dist + (focus ? 3 : 0);
+    const h = camState.height + (focus ? 1.5 : 0);
+    camPos.set(
+      fx + Math.sin(camState.yaw) * Math.cos(camState.pitch) * d,
+      fy + h + Math.sin(camState.pitch) * d * 0.6,
+      fz + Math.cos(camState.yaw) * Math.cos(camState.pitch) * d,
+    );
+    if (camState.shake > 0) {
+      camState.shake = Math.max(0, camState.shake - dt * 2);
+      camPos.x += (Math.random() - 0.5) * camState.shake;
+      camPos.y += (Math.random() - 0.5) * camState.shake;
+      camPos.z += (Math.random() - 0.5) * camState.shake;
     }
-    if (inCar) {
-      target = { x: inCar.x, y: 1.8, z: inCar.z };
-      const wantDist = 11;
-      const wantPitch = 0.24;
-      if (time > cam.manualUntil) {
-        cam.yaw = angleLerp(cam.yaw, inCar.angle + Math.PI, Math.min(1, dt * 1.8));
-        cam.pitch += (wantPitch - cam.pitch) * Math.min(1, dt * 2);
-      }
-      cam.dist += (wantDist - cam.dist) * Math.min(1, dt * 3);
-    } else {
-      const wantDist = 7.5;
-      cam.dist += (wantDist - cam.dist) * Math.min(1, dt * 3);
-    }
-    const cx = target.x + Math.sin(cam.yaw) * Math.cos(cam.pitch) * cam.dist;
-    const cy = target.y + Math.sin(cam.pitch) * cam.dist;
-    const cz = target.z + Math.cos(cam.yaw) * Math.cos(cam.pitch) * cam.dist;
-    // Keep the camera out of buildings: lift it when the line is blocked is overkill;
-    // a simple floor keeps it above the street.
-    camera.position.set(cx, Math.max(cy, 1.2), cz);
-    camera.lookAt(target.x, target.y, target.z);
-    // Sun follows the player so shadows stay crisp nearby.
-    sun.position.set(target.x + 70, 110, target.z + 45);
-    sun.target.position.set(target.x, 0, target.z);
+    camera.position.lerp(camPos, 1 - Math.pow(0.0001, dt));
+    camera.lookAt(camTarget);
   }
 
-  function cameraAim() {
-    const dir = new THREE.Vector3();
-    camera.getWorldDirection(dir);
-    return { pos: camera.position, dir };
-  }
-
-  // --- HUD -----------------------------------------------------------------------
-  const el = (id) => document.getElementById(id);
-  const hud = {
-    cash: el('cash'), stars: el('stars'), healthFill: el('health-fill'),
-    healthNum: el('health-num'), ammo: el('ammo'), objective: el('objective'),
-    speed: el('speed'), speedLabel: el('speed-label'), messages: el('messages'),
-    vignette: el('vignette'), toast: el('toast'), minimap: el('minimap'),
+  // --- HUD ----------------------------------------------------------------------------
+  const hud = document.getElementById('hud');
+  const hudHTML = `
+    <div id="hud-top-left">
+      <div id="hud-cash">$0</div>
+      <div id="hud-stars"></div>
+      <div id="hud-health"><div id="hud-health-fill"></div><span id="hud-health-text">100</span></div>
+    </div>
+    <div id="hud-objective"></div>
+    <div id="hud-minimap"><canvas id="minimap" width="180" height="180"></canvas></div>
+    <div id="hud-bottom-right">
+      <div id="hud-speed"></div>
+      <div id="hud-ammo"></div>
+      <div id="hud-car"></div>
+    </div>
+    <div id="hud-messages"></div>
+    <div id="hud-crosshair">+</div>
+    <div id="hud-vignette"></div>
+    <div id="hud-damage"></div>
+    <div id="hud-controls">WASD move &nbsp;·&nbsp; Shift run &nbsp;·&nbsp; Space jump &nbsp;·&nbsp; E enter/exit car &nbsp;·&nbsp; F punch &nbsp;·&nbsp; Click shoot &nbsp;·&nbsp; R reload &nbsp;·&nbsp; P pause</div>
+  `;
+  hud.innerHTML = hudHTML;
+  const el = {
+    cash: document.getElementById('hud-cash'),
+    stars: document.getElementById('hud-stars'),
+    healthFill: document.getElementById('hud-health-fill'),
+    healthText: document.getElementById('hud-health-text'),
+    objective: document.getElementById('hud-objective'),
+    minimap: document.getElementById('minimap'),
+    speed: document.getElementById('hud-speed'),
+    ammo: document.getElementById('hud-ammo'),
+    car: document.getElementById('hud-car'),
+    messages: document.getElementById('hud-messages'),
+    crosshair: document.getElementById('hud-crosshair'),
+    vignette: document.getElementById('hud-vignette'),
+    damage: document.getElementById('hud-damage'),
   };
-  const mapCtx = hud.minimap ? hud.minimap.getContext('2d') : null;
+  const mm = el.minimap.getContext('2d');
+
+  function drawMinimap() {
+    const s = game.state;
+    const w = 180; const half = CITY_HALF;
+    const px = game.player.inCar ? game.player.inCar.x : game.player.x;
+    const pz = game.player.inCar ? game.player.inCar.z : game.player.z;
+    mm.clearRect(0, 0, w, w);
+    mm.fillStyle = 'rgba(12,16,22,0.78)';
+    mm.beginPath(); mm.arc(w / 2, w / 2, w / 2, 0, TAU); mm.fill();
+    mm.save();
+    mm.beginPath(); mm.arc(w / 2, w / 2, w / 2 - 2, 0, TAU); mm.clip();
+    const toMap = (x, z) => [w / 2 + (x / half) * (w / 2 - 4), w / 2 + (z / half) * (w / 2 - 4)];
+    // Sea + beach.
+    mm.fillStyle = '#2e6f8e';
+    mm.fillRect(0, w / 2 + (CITY_HALF / half) * (w / 2 - 4), w, w);
+    mm.fillStyle = '#d9c28a';
+    mm.fillRect(0, w / 2 + ((CITY_HALF - 2) / half) * (w / 2 - 4), w, 6);
+    // City ground.
+    mm.fillStyle = '#3a3f47';
+    const [gx, gy] = toMap(-half, -half);
+    mm.fillRect(gx, gy, (2 * half / half) * (w / 2 - 4), (2 * half / half) * (w / 2 - 4));
+    // Roads.
+    mm.strokeStyle = '#565d68'; mm.lineWidth = 3;
+    for (const line of game.city.roadLines) {
+      const [ax, ay] = toMap(line, -half); const [bx, by] = toMap(line, half);
+      mm.beginPath(); mm.moveTo(ax, ay); mm.lineTo(bx, by); mm.stroke();
+      const [cx, cy] = toMap(-half, line); const [dx, dy] = toMap(half, line);
+      mm.beginPath(); mm.moveTo(cx, cy); mm.lineTo(dx, dy); mm.stroke();
+    }
+    // Plaza.
+    mm.fillStyle = '#4a7a4a';
+    const [plx, ply] = toMap(37 - 30, 37 - 30);
+    mm.fillRect(plx, ply, 60 / half * (w / 2 - 4), 60 / half * (w / 2 - 4));
+    // Beacon blip.
+    if (game.beaconPos.active) {
+      const [bx2, by2] = toMap(game.beaconPos.x, game.beaconPos.z);
+      const pulse = 6 + Math.sin(s.time * 5) * 2;
+      mm.fillStyle = '#ffd34d';
+      mm.beginPath(); mm.arc(bx2, by2, pulse, 0, TAU); mm.fill();
+      mm.strokeStyle = '#fff'; mm.lineWidth = 1.5;
+      mm.beginPath(); mm.arc(bx2, by2, pulse + 3, 0, TAU); mm.stroke();
+    }
+    // Police blips.
+    mm.fillStyle = '#5a8cff';
+    for (const c of game.policeCars) {
+      const [cx2, cy2] = toMap(c.x, c.z);
+      mm.beginPath(); mm.arc(cx2, cy2, 3, 0, TAU); mm.fill();
+    }
+    // Rival blips.
+    mm.fillStyle = '#ff5a5a';
+    for (const r of game.rivals) {
+      if (r.down > 0) continue;
+      const [rx, ry] = toMap(r.x, r.z);
+      mm.beginPath(); mm.arc(rx, ry, 3, 0, TAU); mm.fill();
+    }
+    // Player arrow (points along the camera yaw, so "up" on the map is "forward").
+    const [ux, uy] = toMap(px, pz);
+    const ang = -camState.yaw + Math.PI;
+    mm.save();
+    mm.translate(ux, uy); mm.rotate(ang);
+    mm.fillStyle = '#ffffff';
+    mm.beginPath(); mm.moveTo(0, -7); mm.lineTo(5, 6); mm.lineTo(0, 3); mm.lineTo(-5, 6); mm.closePath(); mm.fill();
+    mm.restore();
+    mm.restore();
+    // Rim.
+    mm.strokeStyle = 'rgba(255,255,255,0.35)'; mm.lineWidth = 2;
+    mm.beginPath(); mm.arc(w / 2, w / 2, w / 2 - 1, 0, TAU); mm.stroke();
+    // North marker.
+    mm.fillStyle = '#ffffff'; mm.font = 'bold 11px sans-serif'; mm.textAlign = 'center';
+    mm.fillText('N', w / 2, 12);
+  }
 
   function updateHUD() {
     const s = game.state;
-    if (hud.cash) hud.cash.textContent = `$${s.cash.toLocaleString('en-US')}`;
-    if (hud.stars) {
-      let stars = '';
-      for (let i = 0; i < 5; i += 1) stars += i < s.wanted ? '★' : '☆';
-      hud.stars.textContent = stars;
-      hud.stars.classList.toggle('hot', s.wanted > 0);
+    const p = game.player;
+    el.cash.textContent = `$${s.cash.toLocaleString('en-US')}`;
+    let stars = '';
+    for (let i = 0; i < 5; i += 1) stars += `<span class="star ${i < s.wanted ? 'on' : 'off'}">★</span>`;
+    el.stars.innerHTML = stars;
+    el.healthFill.style.width = `${Math.max(0, Math.min(100, p.health))}%`;
+    el.healthFill.style.background = p.health > 50 ? '#37d67a' : p.health > 25 ? '#e8b400' : '#e84040';
+    el.healthText.textContent = Math.max(0, Math.round(p.health));
+    el.objective.textContent = game.objectiveText();
+    const car = p.inCar;
+    if (car) {
+      el.speed.textContent = `${Math.round(Math.abs(car.speed) * 3.6)} km/h`;
+      el.car.textContent = car.name;
+      el.ammo.textContent = '';
+    } else {
+      el.speed.textContent = '';
+      el.car.textContent = '';
+      el.ammo.textContent = s.reloading > 0 ? 'RELOADING…' : `AMMO ${s.ammo} / ${PLAYER.magSize}`;
     }
-    if (hud.healthFill) hud.healthFill.style.width = `${Math.max(0, s.health)}%`;
-    if (hud.healthNum) hud.healthNum.textContent = `${Math.max(0, Math.ceil(s.health))}`;
-    if (hud.ammo) hud.ammo.textContent = s.reloading > 0 ? 'RELOADING' : `AMMO ${s.ammo} / 12`;
-    if (hud.objective) hud.objective.textContent = game.objectiveText();
-    const car = game.player.inCar;
-    if (hud.speed) hud.speed.textContent = car ? `${Math.round(Math.abs(car.speed) * 3.6)}` : '';
-    if (hud.speedLabel) hud.speedLabel.textContent = car ? 'km/h' : '';
-    if (hud.messages) {
-      const recent = s.messages.slice(-3);
-      hud.messages.innerHTML = recent.map((m) => `<div>${m.text}</div>`).join('');
-    }
-    if (hud.vignette) {
-      const hurt = s.health < 35 ? 0.45 : s.wanted > 0 ? 0.18 : 0;
-      hud.vignette.style.opacity = String(hurt);
-    }
+    const msgs = s.messages.slice(-4).map((m) => `<div class="msg">${m.text}</div>`).join('');
+    if (el.messages.innerHTML !== msgs) el.messages.innerHTML = msgs;
+    el.crosshair.style.display = (!car && s.mode === 'play') ? 'block' : 'none';
+    el.vignette.style.opacity = s.wanted > 0 ? String(0.12 + s.wanted * 0.05) : '0';
+    el.damage.style.opacity = p.health < 100 ? String(Math.min(0.7, (100 - p.health) / 100 * 0.9)) : '0';
     drawMinimap();
   }
 
-  function drawMinimap() {
-    if (!mapCtx) return;
-    const W = 190; const H = 190;
-    const span = CITY_HALF * 2 + 60;
-    const toX = (x) => ((x + CITY_HALF + 10) / span) * W;
-    const toY = (z) => ((z + CITY_HALF + 10) / span) * H;
-    mapCtx.clearRect(0, 0, W, H);
-    mapCtx.fillStyle = '#10151d';
-    mapCtx.fillRect(0, 0, W, H);
-    // Sea + beach (south edge).
-    mapCtx.fillStyle = '#2e6f8e';
-    mapCtx.fillRect(0, toY(CITY_HALF), W, H - toY(CITY_HALF));
-    mapCtx.fillStyle = '#d9c28a';
-    mapCtx.fillRect(0, toY(CITY_HALF) - 3, W, 3);
-    // Roads.
-    mapCtx.strokeStyle = '#3a3f47';
-    mapCtx.lineWidth = 4;
-    for (const line of game.city.roadLines) {
-      mapCtx.beginPath(); mapCtx.moveTo(toX(line), 0); mapCtx.lineTo(toX(line), H); mapCtx.stroke();
-      mapCtx.beginPath(); mapCtx.moveTo(0, toY(line)); mapCtx.lineTo(W, toY(line)); mapCtx.stroke();
-    }
-    // Beacon / mission marker.
-    if (game.beaconPos.active) {
-      const pulse = 5 + Math.sin(performance.now() / 200) * 2;
-      mapCtx.fillStyle = '#ffd34d';
-      mapCtx.beginPath(); mapCtx.arc(toX(game.beaconPos.x), toY(game.beaconPos.z), pulse, 0, TAU); mapCtx.fill();
-      mapCtx.fillStyle = '#10151d';
-      mapCtx.font = 'bold 10px sans-serif'; mapCtx.textAlign = 'center'; mapCtx.textBaseline = 'middle';
-      mapCtx.fillText('!', toX(game.beaconPos.x), toY(game.beaconPos.z));
-    }
-    // Traffic (white), police (red), target car (green).
-    for (const car of game.cars) {
-      if (car === game.player.inCar) continue;
-      if (car.police) mapCtx.fillStyle = '#ff4040';
-      else if (car.target) mapCtx.fillStyle = '#37d67a';
-      else if (car.traffic) mapCtx.fillStyle = '#c8ccd4';
-      else continue;
-      mapCtx.beginPath(); mapCtx.arc(toX(car.x), toY(car.z), car.police ? 3.5 : 2.5, 0, TAU); mapCtx.fill();
-    }
-    // Player arrow.
-    const p = game.player;
-    const px = toX(p.x); const py = toY(p.z);
-    const ang = p.inCar ? p.inCar.angle : p.angle;
-    mapCtx.save();
-    mapCtx.translate(px, py);
-    mapCtx.rotate(Math.atan2(Math.sin(ang), -Math.cos(ang)) + Math.PI);
-    mapCtx.fillStyle = '#ffffff';
-    mapCtx.beginPath(); mapCtx.moveTo(0, -7); mapCtx.lineTo(5, 5); mapCtx.lineTo(-5, 5); mapCtx.closePath(); mapCtx.fill();
-    mapCtx.restore();
+  // --- screens ------------------------------------------------------------------------
+  const screen = document.getElementById('screen');
+  function showScreen(html) { screen.innerHTML = html; screen.style.display = 'flex'; }
+  function hideScreen() { screen.style.display = 'none'; screen.innerHTML = ''; }
+
+  function showTitle() {
+    const save = game.loadGame();
+    const savedLine = save && (save.cash > 0 || save.missionIndex > 0)
+      ? `<p class="save-line">Save found — $${(save.cash || 0).toLocaleString('en-US')} · Mission ${Math.min((save.missionIndex || 0) + 1, MISSIONS.length)} of ${MISSIONS.length}</p>`
+      : '';
+    const continueBtn = save && (save.cash > 0 || save.missionIndex > 0)
+      ? '<button id="btn-continue" class="menu-btn">CONTINUE</button>' : '';
+    showScreen(`
+      <div class="panel">
+        <h1>${GAME_TITLE}</h1>
+        <p class="tagline">${GAME_SUBTITLE}</p>
+        <p class="story">${STORY.join('<br>')}</p>
+        ${savedLine}
+        <div class="menu-row">
+          <button id="btn-start" class="menu-btn primary">START</button>
+          ${continueBtn}
+        </div>
+        <p class="hint">WASD move · Shift run · Space jump · E enter/exit car · F punch · Click shoot · R reload · P pause</p>
+        <p class="hint small">Original game made for the make.fun GTA 6 bounty. No Rockstar assets, names or maps.</p>
+      </div>
+    `);
+    document.getElementById('btn-start').addEventListener('click', () => window.__startGame(false));
+    const cont = document.getElementById('btn-continue');
+    if (cont) cont.addEventListener('click', () => window.__startGame(true));
   }
 
-  function resize(w, h) {
-    renderer.setSize(w, h, false);
-    camera.aspect = w / h;
-    camera.updateProjectionMatrix();
+  function showPause() {
+    showScreen(`
+      <div class="panel">
+        <h1>PAUSED</h1>
+        <p class="story">Porto Verde waits for no one — except right now.</p>
+        <div class="menu-row">
+          <button id="btn-resume" class="menu-btn primary">RESUME</button>
+          <button id="btn-quit" class="menu-btn">QUIT TO TITLE</button>
+        </div>
+      </div>
+    `);
+    document.getElementById('btn-resume').addEventListener('click', () => window.__resumeGame());
+    document.getElementById('btn-quit').addEventListener('click', () => window.__quitToTitle());
   }
 
-  function draw(dt, time) {
-    for (const c of clouds) {
-      c.position.x += dt * 1.2;
-      if (c.position.x > 320) c.position.x = -320;
-    }
-    updateCamera(dt, time);
-    updateHUD();
+  function showEnd(kind) {
+    const s = game.state;
+    const isBusted = kind === 'busted';
+    const lost = Math.floor(s.cash * 0.1);
+    showScreen(`
+      <div class="panel">
+        <h1 class="${isBusted ? 'busted' : 'wasted'}">${isBusted ? 'BUSTED' : 'WASTED'}</h1>
+        <p class="story">${isBusted ? 'The Verde PD took you in.' : 'Porto Verde chewed you up.'}</p>
+        <p class="story">You lost $${lost.toLocaleString('en-US')} (10% of your cash).</p>
+        <div class="menu-row">
+          <button id="btn-again" class="menu-btn primary">TRY AGAIN</button>
+          <button id="btn-quit2" class="menu-btn">QUIT TO TITLE</button>
+        </div>
+      </div>
+    `);
+    document.getElementById('btn-again').addEventListener('click', () => window.__respawnAfterEnd(isBusted ? 'garage' : 'hospital'));
+    document.getElementById('btn-quit2').addEventListener('click', () => window.__quitToTitle());
+  }
+
+  function render(dt) {
+    updateCamera(dt);
+    if (game.state.mode === 'play' || game.state.mode === 'paused') updateHUD();
     renderer.render(scene, camera);
   }
 
-  function showScreen(name) {
-    for (const id of ['screen-title', 'screen-pause', 'screen-end']) {
-      const n = el(id);
-      if (n) n.classList.toggle('hidden', id !== name);
-    }
+  function resize() {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
   }
+  window.addEventListener('resize', resize);
 
-  function showToast(text, ms = 2600) {
-    if (!hud.toast) return;
-    hud.toast.textContent = text;
-    hud.toast.classList.remove('hidden');
-    setTimeout(() => hud.toast.classList.add('hidden'), ms);
-  }
-
-  return {
-    renderer, scene, camera, cam,
-    draw, resize, applyDrag, setShotCamera, clearShotCamera,
-    cameraAim, updateHUD, showScreen, showToast,
-  };
+  return { renderer, scene, camera, camState, render, showTitle, showPause, showEnd, hideScreen, updateHUD };
 }

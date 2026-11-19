@@ -1,240 +1,175 @@
-// Boot and the one loop: input is read every frame, the world advances in fixed
-// 1/60 s steps, and the renderer paints what is there. The game moves between four
-// screens: title, play, paused and busted/wasted.
-//
-// ?seed=N fixes the city. ?shot=action|drive|mission|chase (with &seed=N) stages that
-// scene instead of running the loop, paints it twice and sets window.__shotReady.
+// Porto Verde — boot, input, game loop and the ?shot= screenshot hook.
+import * as THREE from 'three';
 import { createAudio } from './audio.js';
 import { createGame } from './sim.js';
 import { createRenderer } from './render.js';
 import { stageShot } from './shots.js';
-import { GAME_TITLE, SAVE_KEY } from './config.js';
 
-const STEP = 1 / 60;
-const MAX_FRAME = 0.25;
-
-const params = new URLSearchParams(window.location.search);
-const shot = params.get('shot');
-const seedParam = Number.parseInt(params.get('seed') ?? '', 10);
-const seed = Number.isInteger(seedParam) ? seedParam : 1337;
-
-const canvas = document.getElementById('game');
-const status = document.getElementById('status');
 const audio = createAudio();
 const game = createGame(audio);
-const renderer = createRenderer(canvas, game);
+const renderer = createRenderer(game);
 
-// Inspection handle (the starter pattern: window.__shotReady for shots). Lets an
-// automated test drive the real game and lets a player inspect state; it changes nothing.
 window.__game = game;
 window.__renderer = renderer;
+window.__THREE = THREE;
 
-function resize() {
-  renderer.resize(window.innerWidth, window.innerHeight);
-}
-window.addEventListener('resize', resize);
-resize();
-
-function announce(message) {
-  if (status) status.textContent = message;
-}
-
-// --- input -----------------------------------------------------------------------
-const keys = new Set();
-let mouseDown = false;
-let mouseDownPos = null;
-let mouseDownTime = 0;
-let shooting = false;
-let shootPulse = false;
-const pressed = new Set();
-
-const KEYMAP = {
-  KeyW: 'fwd', ArrowUp: 'fwd',
-  KeyS: 'back', ArrowDown: 'back',
-  KeyA: 'left', ArrowLeft: 'left',
-  KeyD: 'right', ArrowRight: 'right',
-  ShiftLeft: 'run', ShiftRight: 'run',
-  Space: 'jump',
+const input = {
+  fwd: false, back: false, left: false, right: false, run: false, jump: false,
+  punch: false, reload: false, shoot: false, enter: false,
+  camYaw: 0, camPos: null, camDir: null,
 };
+
+function readMouse() {
+  // Aim from the camera through the screen centre.
+  const v = new THREE.Vector3(0, 0, -1).applyQuaternion(renderer.camera.quaternion);
+  const p = renderer.camera.position;
+  input.camPos = { x: p.x, y: p.y, z: p.z };
+  input.camDir = { x: v.x, y: v.y, z: v.z };
+  input.camYaw = renderer.camState.yaw;
+}
 
 window.addEventListener('keydown', (e) => {
   if (e.repeat) return;
-  const action = KEYMAP[e.code];
-  if (action) { keys.add(action); e.preventDefault(); }
-  if (e.code === 'KeyE') pressed.add('enter');
-  if (e.code === 'KeyF') pressed.add('punch');
-  if (e.code === 'KeyR') pressed.add('reload');
-  if (e.code === 'KeyM') audio.setMuted(!audio.isMuted());
-  if (e.code === 'KeyP' || e.code === 'Escape') pressed.add('pause');
-  if (e.code === 'Enter') pressed.add('confirm');
-});
-window.addEventListener('keyup', (e) => {
-  const action = KEYMAP[e.code];
-  if (action) keys.delete(action);
+  const k = e.code;
+  if (k === 'KeyW' || k === 'ArrowUp') input.fwd = true;
+  if (k === 'KeyS' || k === 'ArrowDown') input.back = true;
+  if (k === 'KeyA' || k === 'ArrowLeft') input.left = true;
+  if (k === 'KeyD' || k === 'ArrowRight') input.right = true;
+  if (k === 'ShiftLeft' || k === 'ShiftRight') input.run = true;
+  if (k === 'Space') { input.jump = true; e.preventDefault(); }
+  if (k === 'KeyE') input.enter = true;
+  if (k === 'KeyF') input.punch = true;
+  if (k === 'KeyR') input.reload = true;
+  if (k === 'KeyP') {
+    if (game.state.mode === 'play') pauseGame();
+    else if (game.state.mode === 'paused') resumeGame();
+  }
 });
 
-canvas.addEventListener('contextmenu', (e) => e.preventDefault());
-canvas.addEventListener('mousedown', (e) => {
-  if (e.button === 0) {
-    mouseDown = true; shooting = true;
-    mouseDownPos = { x: e.clientX, y: e.clientY };
-    mouseDownTime = performance.now();
-  } else if (e.button === 2) {
-    mouseDownPos = { x: e.clientX, y: e.clientY };
-    mouseDownTime = performance.now();
+window.addEventListener('keyup', (e) => {
+  const k = e.code;
+  if (k === 'KeyW' || k === 'ArrowUp') input.fwd = false;
+  if (k === 'KeyS' || k === 'ArrowDown') input.back = false;
+  if (k === 'KeyA' || k === 'ArrowLeft') input.left = false;
+  if (k === 'KeyD' || k === 'ArrowRight') input.right = false;
+  if (k === 'ShiftLeft' || k === 'ShiftRight') input.run = false;
+  if (k === 'Space') input.jump = false;
+});
+
+window.addEventListener('mousedown', (e) => {
+  if (e.button === 0 && game.state.mode === 'play') {
+    readMouse();
+    input.shoot = true;
   }
 });
 window.addEventListener('mouseup', (e) => {
-  if (e.button === 0) { mouseDown = false; shooting = false; }
-  mouseDownPos = null;
+  if (e.button === 0) input.shoot = false;
+});
+
+// Drag to orbit the camera.
+let dragging = false;
+let lastX = 0; let lastY = 0;
+window.addEventListener('mousedown', (e) => {
+  if (e.button === 2 || e.button === 1) { dragging = true; lastX = e.clientX; lastY = e.clientY; }
 });
 window.addEventListener('mousemove', (e) => {
-  if (!mouseDownPos) return;
-  const dx = e.clientX - mouseDownPos.x;
-  const dy = e.clientY - mouseDownPos.y;
-  mouseDownPos = { x: e.clientX, y: e.clientY };
-  // Right-drag (or a long left-drag) orbits the camera; a quick left click shoots.
-  if (e.buttons & 2 || (e.buttons & 1 && Math.abs(dx) + Math.abs(dy) > 2)) {
-    renderer.applyDrag(dx, dy);
+  if (!dragging) return;
+  renderer.camState.yaw -= (e.clientX - lastX) * 0.005;
+  renderer.camState.pitch = Math.max(-0.1, Math.min(0.7, renderer.camState.pitch + (e.clientY - lastY) * 0.004));
+  lastX = e.clientX; lastY = e.clientY;
+});
+window.addEventListener('mouseup', () => { dragging = false; });
+window.addEventListener('contextmenu', (e) => e.preventDefault());
+
+// Pointer lock on click for mouse-look (optional; drag also works).
+document.getElementById('game').addEventListener('click', () => {
+  if (game.state.mode === 'play') {
+    document.getElementById('game').requestPointerLock?.();
   }
 });
-canvas.addEventListener('wheel', (e) => {
-  e.preventDefault();
-  renderer.cam.dist = Math.max(4, Math.min(18, renderer.cam.dist + Math.sign(e.deltaY) * 1.5));
-}, { passive: false });
-
-// --- screens ----------------------------------------------------------------------
-const titleEl = document.getElementById('screen-title');
-const pauseEl = document.getElementById('screen-pause');
-const endEl = document.getElementById('screen-end');
-const endTitle = document.getElementById('end-title');
-const endText = document.getElementById('end-text');
-const continueBtn = document.getElementById('btn-continue');
-const startBtn = document.getElementById('btn-start');
-const resumeBtn = document.getElementById('btn-resume');
-const quitBtn = document.getElementById('btn-quit');
-const respawnBtn = document.getElementById('btn-respawn');
-
-function showOnly(el) {
-  for (const n of [titleEl, pauseEl, endEl]) if (n) n.classList.toggle('hidden', n !== el);
-  renderer.showScreen(el ? el.id : '');
-}
-
-function refreshTitle() {
-  const save = game.loadGame();
-  if (continueBtn) {
-    continueBtn.classList.toggle('hidden', !save);
-    if (save) continueBtn.textContent = `Continue — Mission ${Math.min(save.missionIndex + 1, 5)} · $${save.cash}`;
+document.addEventListener('pointerlockchange', () => {
+  if (document.pointerLockElement) {
+    const onMove = (e) => {
+      renderer.camState.yaw -= e.movementX * 0.003;
+      renderer.camState.pitch = Math.max(-0.1, Math.min(0.7, renderer.camState.pitch + e.movementY * 0.002));
+    };
+    document.addEventListener('mousemove', onMove);
+    const off = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('pointerlockchange', off);
+    };
+    document.addEventListener('pointerlockchange', off);
   }
-  document.title = GAME_TITLE;
-}
+});
 
-function startPlaying(fromSave) {
+function pauseGame() {
+  game.state.mode = 'paused';
+  audio.setEngine(0, false);
+  audio.setSiren(false);
+  renderer.showPause();
+}
+function resumeGame() {
+  game.state.mode = 'play';
+  renderer.hideScreen();
+}
+window.__startGame = (fromSave) => {
   audio.unlock();
+  audio.startMusic();
+  renderer.hideScreen();
   game.startNewGame(fromSave ? game.loadGame() : null);
-  showOnly(null);
-  announce('Playing. WASD to move, E to take a car, F to punch, click to shoot.');
-}
+};
+window.__resumeGame = resumeGame;
+window.__quitToTitle = () => {
+  game.state.mode = 'title';
+  game.reset();
+  audio.setEngine(0, false);
+  audio.setSiren(false);
+  renderer.showTitle();
+};
+window.__respawnAfterEnd = (where) => {
+  renderer.hideScreen();
+  game.respawn(where);
+};
 
-if (startBtn) startBtn.addEventListener('click', () => startPlaying(false));
-if (continueBtn) continueBtn.addEventListener('click', () => startPlaying(true));
-if (resumeBtn) resumeBtn.addEventListener('click', () => { game.state.mode = 'play'; showOnly(null); });
-if (quitBtn) quitBtn.addEventListener('click', () => { game.state.mode = 'title'; game.saveGame(); refreshTitle(); showOnly(titleEl); });
-if (respawnBtn) respawnBtn.addEventListener('click', () => {
-  game.respawn(game.state.mode === 'wasted' ? 'hospital' : 'garage');
-  showOnly(null);
-});
+renderer.showTitle();
 
-// --- shot mode ----------------------------------------------------------------------
-function runShot(name) {
-  showOnly(null); // no title/pause/end overlay over the shot
-  const pose = stageShot(name, game, renderer);
-  renderer.setShotCamera(pose.yaw, pose.pitch, pose.dist, pose.target);
-  renderer.cam.yaw = pose.yaw;
-  let painted = 0;
-  function paint() {
-    renderer.draw(STEP, game.state.time);
-    painted += 1;
-    if (painted < 2) requestAnimationFrame(paint);
-    else window.__shotReady = true;
+// --- main loop -------------------------------------------------------------------
+let last = performance.now();
+let shotReadyFn = null;
+function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+  readMouse();
+  input.camYaw = renderer.camState.yaw;
+  game.step(dt, input);
+  // Edge-triggered actions are consumed by the step.
+  input.enter = false;
+  input.punch = false;
+  input.reload = false;
+  input.jump = false;
+  if (game.state.mode === 'busted' || game.state.mode === 'wasted') {
+    const kind = game.state.mode;
+    game.state.mode = 'end';
+    renderer.showEnd(kind);
+    audio.setEngine(0, false);
+    audio.setSiren(false);
   }
-  requestAnimationFrame(paint);
-}
-
-// --- live game ------------------------------------------------------------------------
-function runGame() {
-  refreshTitle();
-  showOnly(titleEl);
-  announce(`${GAME_TITLE}. Press Enter or click Start.`);
-  let last = performance.now();
-  let accumulator = 0;
-  let lastMode = game.state.mode;
-  let lastMission = game.state.missionIndex;
-
-  function frame(now) {
-    requestAnimationFrame(frame);
-    const dt = Math.min((now - last) / 1000, MAX_FRAME);
-    last = now;
-
-    // Screen transitions.
-    if (pressed.has('confirm') && game.state.mode === 'title') startPlaying(false);
-    if (pressed.has('pause')) {
-      if (game.state.mode === 'play') { game.state.mode = 'paused'; showOnly(pauseEl); }
-      else if (game.state.mode === 'paused') { game.state.mode = 'play'; showOnly(null); }
-    }
-    if (game.state.mode !== lastMode) {
-      if (game.state.mode === 'busted' || game.state.mode === 'wasted') {
-        if (endTitle) endTitle.textContent = game.state.mode === 'busted' ? 'BUSTED' : 'WASTED';
-        if (endText) endText.textContent = game.state.mode === 'busted'
-          ? 'The Verde PD took you in. You lose 10% of your cash.'
-          : 'You got wasted. St. Verde patched you up — for 10% of your cash.';
-        showOnly(endEl);
-      }
-      lastMode = game.state.mode;
-    }
-    if (game.state.missionIndex !== lastMission) {
-      lastMission = game.state.missionIndex;
-      if (game.state.missionIndex < 5) renderer.showToast('MISSION COMPLETE');
-    }
-
-    if (game.state.mode === 'play') {
-      accumulator += dt;
-      while (accumulator >= STEP) {
-        const inCar = !!game.player.inCar;
-        const input = {
-          fwd: keys.has('fwd'), back: keys.has('back') || (inCar && keys.has('jump')),
-          left: keys.has('left'), right: keys.has('right'),
-          run: keys.has('run'), jump: !inCar && keys.has('jump'),
-          enter: pressed.has('enter'), punch: pressed.has('punch'), reload: pressed.has('reload'),
-          shoot: shooting || shootPulse,
-          camYaw: renderer.cam.yaw, camPos: null, camDir: null,
-        };
-        if (input.shoot) {
-          const aim = renderer.cameraAim();
-          input.camPos = { x: aim.pos.x, y: aim.pos.y, z: aim.pos.z };
-          input.camDir = { x: aim.dir.x, y: aim.dir.y, z: aim.dir.z };
-        }
-        game.step(STEP, input);
-        accumulator -= STEP;
-        pressed.clear();
-        shootPulse = false;
-      }
-    } else {
-      accumulator = 0;
-      pressed.clear();
-    }
-    renderer.draw(dt, game.state.time);
+  renderer.render(dt);
+  if (shotReadyFn && shotReadyFn()) {
+    window.__shotReady = true;
+    shotReadyFn = null;
   }
-
-  document.addEventListener('visibilitychange', () => {
-    if (document.hidden && game.state.mode === 'play') {
-      game.state.mode = 'paused';
-      showOnly(pauseEl);
-    }
-  });
-
-  requestAnimationFrame(frame);
+  requestAnimationFrame(loop);
 }
+requestAnimationFrame(loop);
 
-if (shot) runShot(shot);
-else runGame();
+// --- ?shot= hook ------------------------------------------------------------------
+const params = new URLSearchParams(window.location.search);
+const shot = params.get('shot');
+if (shot) {
+  const seed = parseInt(params.get('seed') || '7', 10);
+  audio.unlock();
+  renderer.hideScreen();
+  shotReadyFn = stageShot(game, renderer, shot, seed);
+  window.__shotName = shot;
+}

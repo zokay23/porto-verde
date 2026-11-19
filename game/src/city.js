@@ -104,6 +104,23 @@ export function createCity(THREE) {
   const lampPositions = [];
   const treePositions = [];
 
+  function makeSign(THREE_, text) {
+    const cv = document.createElement('canvas');
+    cv.width = 512; cv.height = 64;
+    const g = cv.getContext('2d');
+    g.fillStyle = '#101418'; g.fillRect(0, 0, 512, 64);
+    g.fillStyle = '#ffd34d';
+    g.font = 'bold 34px sans-serif';
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText(text, 256, 34);
+    const tex = new THREE_.CanvasTexture(cv);
+    tex.colorSpace = THREE_.SRGBColorSpace;
+    return new THREE_.Mesh(
+      new THREE_.PlaneGeometry(14, 1.75),
+      new THREE_.MeshBasicMaterial({ map: tex }),
+    );
+  }
+
   function addBuilding(cx, cz, w, d, h, color, label) {
     const tex = facadeTexture(color, w, h);
     const mat = new THREE.MeshLambertMaterial({ map: tex });
@@ -117,24 +134,6 @@ export function createCity(THREE) {
       sign.position.set(cx, h + 1.2, cz + d / 2 + 0.4);
       group.add(sign);
     }
-    return mesh;
-  }
-
-  function makeSign(THREE_, text) {
-    const cv = document.createElement('canvas');
-    cv.width = 512; cv.height = 64;
-    const g = cv.getContext('2d');
-    g.fillStyle = '#101418'; g.fillRect(0, 0, 512, 64);
-    g.fillStyle = '#ffd34d';
-    g.font = 'bold 34px sans-serif';
-    g.textAlign = 'center'; g.textBaseline = 'middle';
-    g.fillText(text, 256, 34);
-    const tex = new THREE_.CanvasTexture(cv);
-    tex.colorSpace = THREE_.SRGBColorSpace;
-    const mesh = new THREE_.Mesh(
-      new THREE_.PlaneGeometry(14, 1.75),
-      new THREE_.MeshBasicMaterial({ map: tex }),
-    );
     return mesh;
   }
 
