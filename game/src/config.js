@@ -1,134 +1,106 @@
-// Porto Verde — tuning, story and mission data.
-// All names, people and places are original fiction for this game.
-
-export const GAME_TITLE = 'PORTO VERDE';
-export const GAME_SUBTITLE = 'An open-world crime story — an original game, not affiliated with Rockstar Games';
-export const SAVE_KEY = 'portoverde.save.v1';
-
-// --- city geometry -----------------------------------------------------------
-export const BLOCK = 60;            // building block, metres per side
-export const STREET = 14;           // street width
-export const GRID = 6;              // blocks per side
-export const PITCH = BLOCK + STREET;
-export const CITY_HALF = (GRID * PITCH + STREET) / 2; // 229
-export const CITY_SEED = 20261119;  // same seed -> same city, every load
-
-// --- player ------------------------------------------------------------------
-export const PLAYER = {
-  walkSpeed: 6,
-  runSpeed: 10,
-  jumpSpeed: 8,
+// Porto Verde tuning: every number the city, the driving and the missions
+// share lives here, so a balance change is one edit, not a hunt.
+export const CONFIG = {
+  seed: 7,
+  // City grid: 6 x 6 blocks, roads on a regular lattice.
+  block: 44,
+  road: 14,
+  blocks: 6,
+  worldHalf: 168,
+  // Player on foot.
+  walkSpeed: 7,
+  runSpeed: 11.5,
+  jumpSpeed: 8.5,
   gravity: 22,
-  radius: 0.55,
-  health: 100,
-  punchDamage: 25,
-  punchRange: 2.2,
-  punchCooldown: 0.45,
-  pistolDamage: 34,
-  pistolRange: 60,
-  pistolCooldown: 0.28,
+  playerHealth: 100,
+  // Arcade driving.
+  carAccel: 26,
+  carBrake: 42,
+  carMaxSpeed: 34,
+  carMaxReverse: 12,
+  carTurn: 1.9,
+  carDrag: 0.6,
+  trafficSpeed: 11,
+  // Wanted / police.
+  maxWanted: 5,
+  bustedCashLoss: 0.10,
+  policeCarSpeed: 30,
+  policeFootSpeed: 8.2,
+  // Combat.
   magSize: 12,
-  reloadTime: 1.1,
+  shootRange: 34,
+  shootDamage: 34,
+  punchDamage: 25,
+  punchRange: 2.6,
+  rivalHealth: 100,
+  // Missions pay out in cash; mission 2 is timed.
+  mission2Seconds: 90,
+  saveKey: 'porto-verde-save-v1',
 };
 
-// --- cars --------------------------------------------------------------------
-export const CAR = {
-  maxSpeed: 42,          // m/s, about 150 km/h
-  accel: 16,
-  brake: 30,
-  reverseMax: 10,
-  steer: 0.55,
-  trafficSpeed: 9,
+export const PALETTE = {
+  sky: 0xffb36b,
+  sun: 0xffd9a0,
+  sea: 0x1e6f8e,
+  sand: 0xe8cf9a,
+  grass: 0x5da24a,
+  road: 0x33363d,
+  roadLine: 0xf5d76e,
+  sidewalk: 0x9a938a,
+  plaza: 0xb8a888,
+  building: [0xd8a06a, 0xc98a7a, 0x8aa8c8, 0xd8c48a, 0xa88ab8, 0x7ab8a0],
+  windowLit: 0xffe9a8,
+  windowDark: 0x2a3442,
+  garage: 0xe86a3a,
+  marlin: 0x2ec8c8,
+  tower: 0x6a8ac8,
 };
 
-// --- police / wanted -----------------------------------------------------------
-export const WANTED = {
-  max: 5,
-  decaySeconds: 28,      // one star fades after this long quiet, unseen
-  bustHoldSeconds: 1.6,  // a cop must hold this close this long to bust you on foot
-  bustCarHoldSeconds: 2.2,
-};
-
-// --- story --------------------------------------------------------------------
-export const STORY = [
-  'Porto Verde, 2026. Dante "D" Marlow comes home to find his brother\'s garage torched',
-  'and a debt owed to the Marlin Club. One week. Five jobs. No backup. The city is yours',
-  'to take — on foot or behind the wheel — if the Verde PD doesn\'t take you first.',
+export const CAR_DEFS = [
+  { name: 'Verde Sedan', color: 0xc23a2e, speed: 1.0 },
+  { name: 'Marlin Coupe', color: 0x2a6ac8, speed: 1.15 },
+  { name: 'Porto Taxi', color: 0xf2c230, speed: 0.95 },
+  { name: 'Beach Buggy', color: 0x3aa86a, speed: 0.9 },
+  { name: 'Night Van', color: 0x5a4a8a, speed: 0.85 },
+  { name: 'Verde PD Interceptor', color: 0x1a2a4a, speed: 1.2, police: true },
 ];
 
-// Missions run in order: steal, timed delivery, lose the heat, fight, ram.
 export const MISSIONS = [
   {
-    id: 'wheels-up',
-    name: '1 — Wheels Up',
-    kind: 'steal-deliver',
-    text: 'Steal any car and bring it to the garage',
-    detail: 'Press E near a parked car. The garage is marked on your map.',
+    id: 'wheels-up', title: '1 — Wheels Up',
+    brief: 'Steal a car and bring it to the garage.',
+    objective: 'Steal a car, then drive to the garage beacon',
+    reward: 150,
+  },
+  {
+    id: 'the-package', title: '2 — The Package',
+    brief: 'A sealed package for the Marlin Club. 90 seconds. No excuses.',
+    objective: 'Deliver the package to the Marlin Club before the timer ends',
     reward: 300,
   },
   {
-    id: 'the-package',
-    name: '2 — The Package',
-    kind: 'timed-deliver',
-    text: 'Drive the package to the Marlin Club — 90 seconds',
-    detail: 'Fast and clean. The cops are watching this route.',
-    reward: 500,
-    timeLimit: 90,
+    id: 'heat-check', title: '3 — Heat Check',
+    brief: 'Verde PD is watching. Lose the heat, then lay low.',
+    objective: 'Lose your 2-star wanted level',
+    reward: 250,
   },
   {
-    id: 'heat-check',
-    name: '3 — Heat Check',
-    kind: 'lose-wanted',
-    text: 'Lose the 2-star wanted level',
-    detail: 'Break line of sight. Lay low until the heat fades.',
-    reward: 400,
+    id: 'rooftop-rumble', title: '4 — Rooftop Rumble',
+    brief: 'Three Marlin rivals are waiting at the plaza. Settle it.',
+    objective: 'Defeat all 3 rivals at the plaza',
+    reward: 450,
   },
   {
-    id: 'rooftop-rumble',
-    name: '4 — Rooftop Rumble',
-    kind: 'defeat',
-    text: 'Reach the plaza and defeat the 3 rivals',
-    detail: 'On foot. F to punch, click to shoot. Watch your health.',
-    reward: 700,
-    enemies: 3,
-  },
-  {
-    id: 'marlins-due',
-    name: '5 — The Marlin\'s Due',
-    kind: 'ram-target',
-    text: 'Ram the rival\'s car until it stops, then return to the garage',
-    detail: 'The green coupe is running for the bridge. Cut it off.',
-    reward: 1000,
+    id: 'marlins-due', title: '5 — The Marlin\'s Due',
+    brief: 'Ram the rival coupe three times, then bring the car home.',
+    objective: 'Ram the rival coupe 3 times, then return to the garage',
+    reward: 800,
   },
 ];
 
-// --- landmark positions ---------------------------------------------------------
-export const PLACES = {
-  garage: { x: -PITCH * 2 - STREET / 2, z: PITCH * 2 + STREET / 2, label: 'Marlow Garage' },
-  marlinClub: { x: PITCH * 2 + STREET / 2, z: -PITCH * 2 - STREET / 2, label: 'Marlin Club' },
-  plaza: { x: PITCH / 2, z: PITCH / 2, label: 'Plaza Verde' },
-  policeStation: { x: -PITCH * 2 - STREET / 2, z: -PITCH * 2 - STREET / 2, label: 'Verde PD HQ' },
-  hospital: { x: PITCH * 2 + STREET / 2, z: PITCH * 2 + STREET / 2, label: 'St. Verde Hospital' },
+export const STORY = {
+  hero: 'Dante "D" Marlow',
+  city: 'Porto Verde',
+  intro: 'Dante comes home to find his brother\'s garage torched and a debt owed to the Marlin Club. One week. Five jobs. No backup.',
+  outro: 'Debt paid. The garage is yours again — and Porto Verde is open.',
 };
-
-// --- palette -------------------------------------------------------------------
-export const COLORS = {
-  sky: 0x87b5d6,
-  fog: 0x9db8c8,
-  sun: 0xfff2d0,
-  road: 0x383c44,
-  roadLine: 0xd8d3a0,
-  sidewalk: 0x8f8a80,
-  sand: 0xd9c28a,
-  sea: 0x2e6f8e,
-  grass: 0x5d8a4a,
-  building: [0xb8a88f, 0x9aa3ad, 0xc2b49a, 0x8d99a8, 0xa89a86, 0x7e8b99],
-  police: 0x1c2f57,
-};
-
-// Paint jobs for the cars the city spawns (name is shown when you take one).
-export const CAR_NAMES = [
-  ['Vento S', 0x8a1f1f], ['Cometa GT', 0x1f4d8a], ['Lobo Pickup', 0x3a3f45],
-  ['Brisa', 0x7a8a99], ['Tornado', 0xd8a020], ['Falcão', 0x2f6b3a],
-  ['Maré', 0x5a2f7a], ['Solano', 0xc8c8c8], ['Puma X', 0x111111],
-];

@@ -1,115 +1,33 @@
 // Dossier builder for Porto Verde (make.fun gta6-01).
-// Plain Node 22, no dependencies: `MAKEFUN_OUTPUT_DIR=out node main.ts`
-// Validates game/ and screenshots/, copies them to the output dir and writes
-// out/dossier.json (makefun/dossier/v1) for the judge.
-import { copyFile, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
-import { createHash } from 'node:crypto';
-import path from 'node:path';
+// Plain Node 22, standard library only: copies game/ and screenshots/
+// beside this file to /output and writes /output/dossier.json with the
+// vendored make.fun library buildDossier, byte for byte what the scorer
+// rebuilds. Run: mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
+import { cpSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { buildDossier } from './vendor/makefun-game.ts';
 
-const root = path.dirname(fileURLToPath(import.meta.url));
-const outDir = process.env.MAKEFUN_OUTPUT_DIR
-  ? path.resolve(process.env.MAKEFUN_OUTPUT_DIR)
-  : path.join(root, 'out');
-const gameDir = path.join(root, 'game');
-const shotDir = path.join(root, 'screenshots');
+const here = fileURLToPath(new URL('.', import.meta.url));
+const out = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
 
-const GAME_MAX_BYTES = 48 * 1024 * 1024;
-const GAME_MAX_FILES = 993;
-const TEXT_MAX_BYTES = 163840;
-const SHOT_MAX_BYTES = 262144;
-const SHOT_MAX_COUNT = 4;
-
-function sha256(buf) {
-  return createHash('sha256').update(buf).digest('hex');
+mkdirSync(out, { recursive: true });
+cpSync(join(here, 'game'), join(out, 'game'), { recursive: true });
+mkdirSync(join(out, 'screenshots'), { recursive: true });
+if (existsSync(join(here, 'screenshots'))) {
+  cpSync(join(here, 'screenshots'), join(out, 'screenshots'), { recursive: true });
 }
 
-async function walk(dir, base) {
-  const out = [];
-  for (const name of await readdir(dir)) {
-    const full = path.join(dir, name);
-    const st = await stat(full);
-    if (st.isDirectory()) out.push(...await walk(full, base));
-    else out.push({ full, rel: path.relative(base, full).split(path.sep).join('/') });
-  }
-  return out;
-}
-
-async function main() {
-  const errors = [];
-  const gameFiles = await walk(gameDir, root);
-  gameFiles.sort((a, b) => a.rel.localeCompare(b.rel));
-  if (gameFiles.length > GAME_MAX_FILES) {
-    errors.push(`too many game files: ${gameFiles.length} > ${GAME_MAX_FILES}`);
-  }
-  let totalBytes = 0;
-  const files = [];
-  for (const f of gameFiles) {
-    const buf = await readFile(f.full);
-    totalBytes += buf.length;
-    files.push({ path: f.rel, bytes: buf.length, sha256: sha256(buf) });
-  }
-  if (totalBytes > GAME_MAX_BYTES) errors.push(`game too big: ${totalBytes} > ${GAME_MAX_BYTES}`);
-
-  // The source-text cap counts the code we wrote, not the vendored library:
-  // game/vendor/three.*.js is the three.js distribution, excluded.
-  let textBytes = 0;
-  for (const f of files) {
-    if (f.path.startsWith('game/vendor/')) continue;
-    if (/\.(js|ts|html|json|css)$/.test(f.path)) textBytes += f.bytes;
-  }
-  if (textBytes > TEXT_MAX_BYTES) errors.push(`source text too big: ${textBytes} > ${TEXT_MAX_BYTES}`);
-
-  // Entry point + import map sanity.
-  const indexHtml = await readFile(path.join(gameDir, 'index.html'), 'utf8');
-  if (!indexHtml.includes('src/main.js')) errors.push('game/index.html does not load src/main.js');
-  if (!indexHtml.includes('three.module.min.js')) errors.push('game/index.html does not reference vendored three.js');
-
-  // Screenshots: 3-4 real renders, each under the cap.
-  const shotNames = (await readdir(shotDir)).filter((n) => /\.(jpg|jpeg|png)$/i.test(n)).sort();
-  if (shotNames.length < 3 || shotNames.length > SHOT_MAX_COUNT) {
-    errors.push(`screenshots: need 3-4, found ${shotNames.length}`);
-  }
-  const screenshots = [];
-  for (const name of shotNames) {
-    const buf = await readFile(path.join(shotDir, name));
-    if (buf.length > SHOT_MAX_BYTES) errors.push(`screenshot ${name} too big: ${buf.length} > ${SHOT_MAX_BYTES}`);
-    screenshots.push({ path: `screenshots/${name}`, bytes: buf.length, sha256: sha256(buf) });
-  }
-
-  // Copy game/ + screenshots/ into out/ for the harness.
-  await mkdir(path.join(outDir, 'game'), { recursive: true });
-  await mkdir(path.join(outDir, 'screenshots'), { recursive: true });
-  for (const f of gameFiles) {
-    const dest = path.join(outDir, f.rel);
-    await mkdir(path.dirname(dest), { recursive: true });
-    await copyFile(f.full, dest);
-  }
-  for (const name of shotNames) {
-    await copyFile(path.join(shotDir, name), path.join(outDir, 'screenshots', name));
-  }
-
-  const dossier = {
-    schema: 'makefun/dossier/v1',
-    game: 'porto-verde',
-    files,
-    game_total_bytes: totalBytes,
-    text_total_bytes: textBytes,
-    screenshots,
-    errors,
-  };
-  await writeFile(path.join(outDir, 'dossier.json'), JSON.stringify(dossier, null, 2) + '\n');
-  console.log(JSON.stringify({
-    files: files.length,
-    game_total_bytes: totalBytes,
-    text_total_bytes: textBytes,
-    screenshots: screenshots.length,
-    errors,
-  }, null, 2));
-  if (errors.length > 0) process.exitCode = 1;
-}
-
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+// The scorer's own caps (reference/gate.json): only text_max_bytes shapes
+// the bytes; the others refuse an entry the scorer would refuse.
+writeFileSync(
+  join(out, 'dossier.json'),
+  buildDossier(out, {
+    text_max_bytes: 163840,
+    screenshots: { max: 4, max_bytes: 262144 },
+    game_max_files: 993,
+    game_max_bytes: 50331648,
+    game_path_max_bytes: 1000,
+  }),
+);
+console.log('Porto Verde dossier written to', join(out, 'dossier.json'));

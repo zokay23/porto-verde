@@ -1,55 +1,46 @@
-"""Regenerate the 4 deterministic screenshots (seed 7) at 1280x720.
-Waits for window.__shotReady (40 settled frames; SwiftShader is slow, so the
-timeout is generous). Usage: python3 shots.py
+"""Take Porto Verde's four screenshots with headless Chromium.
+
+Serves game/ on localhost:8080 (the dev server must already be running),
+opens each ?shot=<name>&seed=7 scene, waits for the render, and saves a
+1280x720 JPEG (quality 80) into screenshots/. Prints size + dimensions
+for every file so the gate limits are checked at a glance.
 """
-import json
-import os
+import subprocess
 import sys
+from pathlib import Path
 
-from playwright.sync_api import sync_playwright
+ROOT = Path(__file__).resolve().parent
+SHOTS = ["action", "drive", "mission", "chase"]
+CHROME = Path.home() / ".cache/ms-playwright/chromium-1255/chrome-linux64/chrome"
 
-SHOTS = [
-    ("action", "1-action.jpg"),
-    ("drive", "2-drive.jpg"),
-    ("mission", "3-mission.jpg"),
-    ("chase", "4-chase.jpg"),
-]
-OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "screenshots")
+
+def take(name):
+    png = Path(f"/tmp/pv-{name}.png")
+    cmd = [
+        str(CHROME), "--headless=new", "--no-sandbox", "--disable-dev-shm-usage",
+        "--enable-unsafe-swiftshader", "--window-size=1280,720",
+        f"--screenshot={png}",
+        f"http://localhost:8080/?shot={name}&seed=7",
+    ]
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+    if not png.exists():
+        print(f"{name}: CHROME FAILED rc={r.returncode}\n{r.stdout[-500:]}\n{r.stderr[-500:]}")
+        return False
+    from PIL import Image
+    im = Image.open(png).convert("RGB")
+    out = ROOT / "screenshots" / f"{['1-action', '2-drive', '3-mission', '4-chase'][SHOTS.index(name)]}.jpg"
+    im.save(out, "JPEG", quality=80)
+    print(f"{name}: {out.name} {im.size} {out.stat().st_size} bytes")
+    return out.stat().st_size <= 262144
 
 
 def main():
-    errors = []
-    wanted = sys.argv[1:] or [s[0] for s in SHOTS]
-    shots = [s for s in SHOTS if s[0] in wanted]
-    with sync_playwright() as p:
-        browser = p.chromium.launch(
-            executable_path="/home/hatch/.cache/ms-playwright/chromium-1255/chrome-linux64/chrome",
-            args=["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--no-sandbox"],
-        )
-        for name, fname in shots:
-            page = browser.new_page(viewport={"width": 1280, "height": 720})
-            page.on("console", lambda m: errors.append(f"[{name}] console.{m.type}: {m.text}") if m.type == "error" else None)
-            page.on("pageerror", lambda e: errors.append(f"[{name}] pageerror: {e}"))
-            page.goto(f"http://localhost:8080/?shot={name}&seed=7", wait_until="load")
-            try:
-                page.wait_for_function("() => window.__shotReady === true", timeout=240000)
-            except Exception as e:
-                print(f"FAIL {name}: shot never became ready ({e})")
-                page.close()
-                continue
-            page.wait_for_timeout(500)
-            path = os.path.join(OUT, fname)
-            page.screenshot(path=path, type="jpeg", quality=80)
-            size = os.path.getsize(path)
-            print(f"OK {name} -> {fname} ({size} bytes, {'UNDER' if size < 262144 else 'OVER'} 256 KiB cap)")
-            page.close()
-        browser.close()
-    print("\n--- errors ---")
-    for e in errors[:20]:
-        print(" ", e)
-    if errors:
-        sys.exit(1)
+    ok = True
+    for name in SHOTS:
+        ok = take(name) and ok
+    print("ALL OK" if ok else "SOME SHOTS FAILED / TOO BIG")
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

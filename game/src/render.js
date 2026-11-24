@@ -1,305 +1,259 @@
-// Renderer: the three.js scene, the chase cameras, the HUD, the live minimap
-// and the title / pause / busted / wasted screens. The simulation owns the world.
+// Rendering: three.js chase camera, meshes synced from the sim, and a
+// 2D canvas HUD on top (cash, wanted stars, health, mission, speed,
+// ammo, message feed and a circular minimap). No DOM text is used for
+// the HUD, so it shows up identically in screenshots.
 import * as THREE from 'three';
-import { CITY_HALF, COLORS, GAME_SUBTITLE, GAME_TITLE, MISSIONS, PLAYER, STORY } from './config.js';
+import { CONFIG, MISSIONS } from './config.js';
+import { buildCity } from './city.js';
 
-const TAU = Math.PI * 2;
-
-export function createRenderer(game) {
-  const canvas = document.getElementById('game');
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-  renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-  renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.05;
-
-  const scene = new THREE.Scene();
-  scene.background = new THREE.Color(COLORS.sky);
-  scene.fog = new THREE.Fog(COLORS.fog, 120, 420);
-  scene.add(game.worldGroup);
-
-  const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 1200);
-  camera.position.set(0, 6, 14);
-
-  const sun = new THREE.DirectionalLight(COLORS.sun, 2.6);
-  sun.position.set(120, 180, 60);
-  sun.castShadow = true;
-  sun.shadow.mapSize.set(2048, 2048);
-  sun.shadow.camera.left = -260;
-  sun.shadow.camera.right = 260;
-  sun.shadow.camera.top = 260;
-  sun.shadow.camera.bottom = -260;
-  sun.shadow.camera.far = 600;
-  scene.add(sun);
-  scene.add(new THREE.HemisphereLight(0xbfd9e8, 0x5a5a48, 1.1));
-
-  // --- chase camera -----------------------------------------------------------------
-  const camState = { yaw: 0, pitch: 0.22, dist: 11, height: 4.5, shake: 0 };
-  const camTarget = new THREE.Vector3();
-  const camPos = new THREE.Vector3();
-
-  function updateCamera(dt) {
-    const p = game.player;
-    const car = p.inCar || null;
-    const fx = car ? car.x : p.x;
-    const fz = car ? car.z : p.z;
-    const fy = car ? 1.2 : p.y + 1.6;
-    camTarget.set(fx, fy, fz);
-    const d = camState.dist + (car ? 3 : 0);
-    const h = camState.height + (car ? 1.5 : 0);
-    camPos.set(
-      fx + Math.sin(camState.yaw) * Math.cos(camState.pitch) * d,
-      fy + h + Math.sin(camState.pitch) * d * 0.6,
-      fz + Math.cos(camState.yaw) * Math.cos(camState.pitch) * d,
-    );
-    if (camState.shake > 0) {
-      camState.shake = Math.max(0, camState.shake - dt * 2);
-      camPos.x += (Math.random() - 0.5) * camState.shake;
-      camPos.y += (Math.random() - 0.5) * camState.shake;
-      camPos.z += (Math.random() - 0.5) * camState.shake;
-    }
-    camera.position.lerp(camPos, 1 - Math.pow(0.0001, dt));
-    camera.lookAt(camTarget);
-  }
-
-  // --- HUD -----------------------------------------------------------------------------
+export function createRenderer(sim, rng) {
+  const canvas3d = document.getElementById('game3d');
   const hud = document.getElementById('hud');
-  hud.innerHTML = `
-    <div id="hud-top-left">
-      <div id="hud-cash">$0</div>
-      <div id="hud-stars"></div>
-      <div id="hud-health"><div id="hud-health-fill"></div><span id="hud-health-text">100</span></div>
-    </div>
-    <div id="hud-objective"></div>
-    <div id="hud-minimap"><canvas id="minimap" width="180" height="180"></canvas></div>
-    <div id="hud-bottom-right">
-      <div id="hud-speed"></div>
-      <div id="hud-ammo"></div>
-      <div id="hud-car"></div>
-    </div>
-    <div id="hud-messages"></div>
-    <div id="hud-crosshair">+</div>
-    <div id="hud-vignette"></div>
-    <div id="hud-damage"></div>
-    <div id="hud-controls">WASD move &nbsp;·&nbsp; Shift run &nbsp;·&nbsp; Space jump &nbsp;·&nbsp; E enter/exit car &nbsp;·&nbsp; F punch &nbsp;·&nbsp; Click shoot &nbsp;·&nbsp; R reload &nbsp;·&nbsp; P pause</div>
-  `;
-  const el = {
-    cash: document.getElementById('hud-cash'),
-    stars: document.getElementById('hud-stars'),
-    healthFill: document.getElementById('hud-health-fill'),
-    healthText: document.getElementById('hud-health-text'),
-    objective: document.getElementById('hud-objective'),
-    minimap: document.getElementById('minimap'),
-    speed: document.getElementById('hud-speed'),
-    ammo: document.getElementById('hud-ammo'),
-    car: document.getElementById('hud-car'),
-    messages: document.getElementById('hud-messages'),
-    crosshair: document.getElementById('hud-crosshair'),
-    vignette: document.getElementById('hud-vignette'),
-    damage: document.getElementById('hud-damage'),
-  };
-  const mm = el.minimap.getContext('2d');
+  const renderer = new THREE.WebGLRenderer({ canvas: canvas3d, antialias: true });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.1, 900);
+  const city = buildCity(THREE, scene, rng);
+  sim.city = city;
 
-  function drawMinimap() {
-    const s = game.state;
-    const w = 180;
-    const half = CITY_HALF;
-    const px = game.player.inCar ? game.player.inCar.x : game.player.x;
-    const pz = game.player.inCar ? game.player.inCar.z : game.player.z;
-    mm.clearRect(0, 0, w, w);
-    mm.fillStyle = 'rgba(12,16,22,0.78)';
-    mm.beginPath();
-    mm.arc(w / 2, w / 2, w / 2, 0, TAU);
-    mm.fill();
-    mm.save();
-    mm.beginPath();
-    mm.arc(w / 2, w / 2, w / 2 - 2, 0, TAU);
-    mm.clip();
-    const toMap = (x, z) => [w / 2 + (x / half) * (w / 2 - 4), w / 2 + (z / half) * (w / 2 - 4)];
-    // Sea + beach at the south edge.
-    mm.fillStyle = '#2e6f8e';
-    mm.fillRect(0, w / 2 + (CITY_HALF / half) * (w / 2 - 4), w, w);
-    mm.fillStyle = '#d9c28a';
-    mm.fillRect(0, w / 2 + ((CITY_HALF - 2) / half) * (w / 2 - 4), w, 6);
-    // City ground.
-    mm.fillStyle = '#3a3f47';
-    const [gx, gy] = toMap(-half, -half);
-    mm.fillRect(gx, gy, (2 * half / half) * (w / 2 - 4), (2 * half / half) * (w / 2 - 4));
-    // Roads.
-    mm.strokeStyle = '#565d68';
-    mm.lineWidth = 3;
-    for (const line of game.city.roadLines) {
-      const [ax, ay] = toMap(line, -half);
-      const [bx, by] = toMap(line, half);
-      mm.beginPath(); mm.moveTo(ax, ay); mm.lineTo(bx, by); mm.stroke();
-      const [cx, cy] = toMap(-half, line);
-      const [dx, dy] = toMap(half, line);
-      mm.beginPath(); mm.moveTo(cx, cy); mm.lineTo(dx, dy); mm.stroke();
+  const hudCtx = hud.getContext('2d');
+  hud.width = window.innerWidth; hud.height = window.innerHeight;
+
+  // Player figure: orange jacket, dark trousers, head.
+  const playerGroup = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.9, 1.1, 0.5),
+    new THREE.MeshLambertMaterial({ color: 0xe86a3a }));
+  body.position.y = 1.0; playerGroup.add(body);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.32, 12, 12),
+    new THREE.MeshLambertMaterial({ color: 0xe8b890 }));
+  head.position.y = 1.85; playerGroup.add(head);
+  const legs = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.9, 0.4),
+    new THREE.MeshLambertMaterial({ color: 0x2a2a3a }));
+  legs.position.y = 0.45; playerGroup.add(legs);
+  scene.add(playerGroup);
+
+  // Beacon: a tall glowing column over the current mission target.
+  const beacon = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 1.6, 42, 12, 1, true),
+    new THREE.MeshBasicMaterial({ color: 0xffd23a, transparent: true, opacity: 0.35, side: THREE.DoubleSide }));
+  scene.add(beacon);
+  const beaconRing = new THREE.Mesh(new THREE.TorusGeometry(4, 0.35, 8, 32),
+    new THREE.MeshBasicMaterial({ color: 0xffd23a }));
+  beaconRing.rotation.x = Math.PI / 2; scene.add(beaconRing);
+
+  const carMeshes = new Map();
+  const pedMeshes = new Map();
+  const rivalMeshes = new Map();
+  const officerMeshes = new Map();
+
+  function carMesh(car) {
+    const g = new THREE.Group();
+    const bodyM = new THREE.Mesh(new THREE.BoxGeometry(2, 0.75, 4.4),
+      new THREE.MeshLambertMaterial({ color: car.color }));
+    bodyM.position.y = 0.65; g.add(bodyM);
+    const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.65, 2.2),
+      new THREE.MeshLambertMaterial({ color: 0x1a2a3a }));
+    cabin.position.set(0, 1.25, -0.2); g.add(cabin);
+    const wheelGeo = new THREE.CylinderGeometry(0.42, 0.42, 0.3, 10);
+    const wheelMat = new THREE.MeshLambertMaterial({ color: 0x111111 });
+    for (const [wx, wz] of [[-0.95, 1.4], [0.95, 1.4], [-0.95, -1.4], [0.95, -1.4]]) {
+      const w = new THREE.Mesh(wheelGeo, wheelMat);
+      w.rotation.z = Math.PI / 2; w.position.set(wx, 0.42, wz); g.add(w);
     }
-    // Plaza.
-    mm.fillStyle = '#4a7a4a';
-    const [plx, ply] = toMap(37 - 30, 37 - 30);
-    mm.fillRect(plx, ply, (60 / half) * (w / 2 - 4), (60 / half) * (w / 2 - 4));
-    // Mission beacon blip.
-    if (game.beaconPos.active) {
-      const [bx2, by2] = toMap(game.beaconPos.x, game.beaconPos.z);
-      const pulse = 6 + Math.sin(s.time * 5) * 2;
-      mm.fillStyle = '#ffd34d';
-      mm.beginPath(); mm.arc(bx2, by2, pulse, 0, TAU); mm.fill();
-      mm.strokeStyle = '#fff';
-      mm.lineWidth = 1.5;
-      mm.beginPath(); mm.arc(bx2, by2, pulse + 3, 0, TAU); mm.stroke();
+    if (car.police) {
+      const bar = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.25, 0.5),
+        new THREE.MeshBasicMaterial({ color: car.flash ? 0xff2222 : 0x2244ff }));
+      bar.position.set(0, 1.7, -0.2); bar.name = 'lightbar'; g.add(bar);
     }
-    // Police blips.
-    mm.fillStyle = '#5a8cff';
-    for (const c of game.policeCars) {
-      const [cx2, cy2] = toMap(c.x, c.z);
-      mm.beginPath(); mm.arc(cx2, cy2, 3, 0, TAU); mm.fill();
-    }
-    // Rival blips.
-    mm.fillStyle = '#ff5a5a';
-    for (const r of game.rivals) {
-      if (r.down > 0) continue;
-      const [rx, ry] = toMap(r.x, r.z);
-      mm.beginPath(); mm.arc(rx, ry, 3, 0, TAU); mm.fill();
-    }
-    // Player arrow (map "up" is camera forward).
-    const [ux, uy] = toMap(px, pz);
-    const ang = -camState.yaw + Math.PI;
-    mm.save();
-    mm.translate(ux, uy);
-    mm.rotate(ang);
-    mm.fillStyle = '#ffffff';
-    mm.beginPath();
-    mm.moveTo(0, -7); mm.lineTo(5, 6); mm.lineTo(0, 3); mm.lineTo(-5, 6);
-    mm.closePath();
-    mm.fill();
-    mm.restore();
-    mm.restore();
-    // Rim + north marker.
-    mm.strokeStyle = 'rgba(255,255,255,0.35)';
-    mm.lineWidth = 2;
-    mm.beginPath(); mm.arc(w / 2, w / 2, w / 2 - 1, 0, TAU); mm.stroke();
-    mm.fillStyle = '#ffffff';
-    mm.font = 'bold 11px sans-serif';
-    mm.textAlign = 'center';
-    mm.fillText('N', w / 2, 12);
+    scene.add(g);
+    return g;
   }
 
-  function updateHUD() {
-    const s = game.state;
-    const p = game.player;
-    el.cash.textContent = `$${s.cash.toLocaleString('en-US')}`;
+  function personMesh(color) {
+    const g = new THREE.Group();
+    const b = new THREE.Mesh(new THREE.BoxGeometry(0.7, 1.0, 0.4),
+      new THREE.MeshLambertMaterial({ color }));
+    b.position.y = 0.9; g.add(b);
+    const h = new THREE.Mesh(new THREE.SphereGeometry(0.28, 10, 10),
+      new THREE.MeshLambertMaterial({ color: 0xd8a880 }));
+    h.position.y = 1.65; g.add(h);
+    scene.add(g);
+    return g;
+  }
+
+  function syncMeshes() {
+    for (const car of sim.cars) {
+      let m = carMeshes.get(car.id);
+      if (!m) { m = carMesh(car); carMeshes.set(car.id, m); }
+      m.position.set(car.x, 0, car.z);
+      m.rotation.y = car.angle;
+      const bar = m.getObjectByName('lightbar');
+      if (bar) bar.material.color.setHex(car.flash ? 0xff2222 : 0x2244ff);
+    }
+    for (const [id, m] of [...carMeshes]) {
+      if (!sim.cars.some(c => c.id === id)) { scene.remove(m); carMeshes.delete(id); }
+    }
+    for (const ped of sim.peds) {
+      let m = pedMeshes.get(ped.id);
+      if (!m) { m = personMesh(ped.color); pedMeshes.set(ped.id, m); }
+      m.position.set(ped.x, 0, ped.z); m.rotation.y = ped.angle;
+    }
+    for (const r of sim.rivals) {
+      let m = rivalMeshes.get(r.id);
+      if (!m) { m = personMesh(0xc23a2e); rivalMeshes.set(r.id, m); }
+      m.visible = r.alive;
+      m.position.set(r.x, 0, r.z); m.rotation.y = r.angle;
+    }
+    for (const o of sim.policeFoot) {
+      let m = officerMeshes.get(o.id);
+      if (!m) { m = personMesh(0x1a2a4a); officerMeshes.set(o.id, m); }
+      m.position.set(o.x, 0, o.z); m.rotation.y = o.angle;
+    }
+    for (const [id, m] of [...officerMeshes]) {
+      if (!sim.policeFoot.some(o => o.id === id)) { scene.remove(m); officerMeshes.delete(id); }
+    }
+  }
+
+  function drawHud(input) {
+    const W = hud.width, H = hud.height, g = hudCtx;
+    g.clearRect(0, 0, W, H);
+    const p = sim.player;
+    // Top-left: cash + mission title.
+    g.fillStyle = 'rgba(0,0,0,0.55)'; g.fillRect(16, 14, 330, 74);
+    g.fillStyle = '#7ee787'; g.font = 'bold 26px sans-serif'; g.textAlign = 'left';
+    g.fillText(`$${p.cash}`, 28, 46);
+    g.fillStyle = '#ffffff'; g.font = 'bold 15px sans-serif';
+    g.fillText(sim.mission ? sim.mission.title : '', 28, 70);
+    g.font = '13px sans-serif'; g.fillStyle = '#ffd23a';
+    const target = sim.mission ? missionTargetText(sim) : '';
+    g.fillText(target, 28, 84 - 0); // objective line, kept short for the HUD
+    // Top-centre: objective + live distance, big and readable.
+    const t = sim.mission ? currentTarget(sim) : null;
+    if (t) {
+      const d = Math.round(Math.hypot(p.x - t.x, p.z - t.z));
+      const label = `${t.label}  •  ${d}m${sim.missionIndex === 1 ? `  •  ${Math.ceil(sim.missionTimer)}s` : ''}`;
+      g.font = 'bold 17px sans-serif';
+      const w = g.measureText(label).width;
+      g.fillStyle = 'rgba(0,0,0,0.6)'; g.fillRect(W / 2 - w / 2 - 14, 12, w + 28, 34);
+      g.fillStyle = '#ffffff'; g.textAlign = 'center'; g.fillText(label, W / 2, 36);
+      g.textAlign = 'left';
+    }
+    // Top-right: wanted stars.
+    g.font = '30px sans-serif'; g.textAlign = 'right';
     let stars = '';
-    for (let i = 0; i < 5; i += 1) stars += `<span class="star ${i < s.wanted ? 'on' : 'off'}">★</span>`;
-    el.stars.innerHTML = stars;
-    el.healthFill.style.width = `${Math.max(0, Math.min(100, p.health))}%`;
-    el.healthFill.style.background = p.health > 50 ? '#37d67a' : p.health > 25 ? '#e8b400' : '#e84040';
-    el.healthText.textContent = Math.max(0, Math.round(p.health));
-    el.objective.textContent = game.objectiveText();
-    const car = p.inCar;
-    if (car) {
-      el.speed.textContent = `${Math.round(Math.abs(car.speed) * 3.6)} km/h`;
-      el.car.textContent = car.name;
-      el.ammo.textContent = '';
-    } else {
-      el.speed.textContent = '';
-      el.car.textContent = '';
-      el.ammo.textContent = s.reloading > 0 ? 'RELOADING…' : `AMMO ${s.ammo} / ${PLAYER.magSize}`;
+    for (let i = 0; i < CONFIG.maxWanted; i++) stars += i < p.wanted ? '★' : '☆';
+    g.fillStyle = p.wanted > 0 ? '#ff4444' : '#ffffff';
+    g.fillText(stars, W - 20, 48);
+    g.textAlign = 'left';
+    // Bottom-right: speed, car, ammo.
+    g.fillStyle = 'rgba(0,0,0,0.55)'; g.fillRect(W - 230, H - 96, 214, 80);
+    const speed = p.inCar ? Math.round(Math.abs(p.inCar.speed) * 3.6) : 0;
+    g.fillStyle = '#ffffff'; g.font = 'bold 30px sans-serif';
+    g.fillText(`${speed}`, W - 210, H - 62);
+    g.font = '13px sans-serif'; g.fillText('km/h', W - 150, H - 62);
+    g.font = 'bold 14px sans-serif';
+    g.fillText(p.inCar ? p.inCar.def.name : 'On foot', W - 210, H - 40);
+    g.fillStyle = '#ffd23a';
+    g.fillText(`AMMO ${p.ammo}/${CONFIG.magSize}  •  R reload`, W - 210, H - 20);
+    // Bottom-left: health bar above the minimap.
+    const hx = 24, hy = H - 250;
+    g.fillStyle = 'rgba(0,0,0,0.55)'; g.fillRect(hx - 8, hy - 8, 204, 30);
+    g.fillStyle = '#333'; g.fillRect(hx, hy, 188, 14);
+    g.fillStyle = p.health > 40 ? '#4ade80' : '#ff4444';
+    g.fillRect(hx, hy, 188 * Math.max(0, p.health / 100), 14);
+    // Minimap: whole city, circular, bottom-left.
+    const cx = 120, cy = H - 120, R = 96;
+    g.save();
+    g.beginPath(); g.arc(cx, cy, R, 0, Math.PI * 2); g.clip();
+    g.fillStyle = '#1a2a1a'; g.fillRect(cx - R, cy - R, R * 2, R * 2);
+    const scale = (R * 2) / 360;
+    const mx = (x) => cx + x * scale, mz = (z) => cy + z * scale;
+    g.strokeStyle = '#555'; g.lineWidth = 5;
+    for (const a of [-150, -100, -50, 0, 50, 100, 150]) {
+      g.beginPath(); g.moveTo(mx(-170), mz(a)); g.lineTo(mx(170), mz(a)); g.stroke();
+      g.beginPath(); g.moveTo(mx(a), mz(-170)); g.lineTo(mx(a), mz(170)); g.stroke();
     }
-    const msgs = s.messages.slice(-4).map((m) => `<div class="msg">${m.text}</div>`).join('');
-    if (el.messages.innerHTML !== msgs) el.messages.innerHTML = msgs;
-    el.crosshair.style.display = (!car && s.mode === 'play') ? 'block' : 'none';
-    el.vignette.style.opacity = s.wanted > 0 ? String(0.12 + s.wanted * 0.05) : '0';
-    el.damage.style.opacity = p.health < 100 ? String(Math.min(0.7, ((100 - p.health) / 100) * 0.9)) : '0';
-    drawMinimap();
+    g.fillStyle = '#2ec8c8'; g.fillRect(mx(112) - 4, mz(112) - 4, 8, 8); // Marlin
+    g.fillStyle = '#e86a3a'; g.fillRect(mx(-138) - 4, mz(-138) - 4, 8, 8); // garage
+    g.fillStyle = '#3aa8d8'; g.beginPath(); g.arc(mx(0), mz(0), 5, 0, Math.PI * 2); g.fill();
+    if (t) { // mission beacon, pulsing yellow
+      g.fillStyle = '#ffd23a'; g.beginPath(); g.arc(mx(t.x), mz(t.z), 7 + 2 * Math.sin(sim.time * 4), 0, Math.PI * 2); g.fill();
+    }
+    for (const c of sim.cars) if (c.police) { g.fillStyle = '#ff2222'; g.beginPath(); g.arc(mx(c.x), mz(c.z), 4, 0, Math.PI * 2); g.fill(); }
+    for (const r of sim.rivals) if (r.alive) { g.fillStyle = '#ff8800'; g.beginPath(); g.arc(mx(r.x), mz(r.z), 4, 0, Math.PI * 2); g.fill(); }
+    g.fillStyle = '#ffffff';
+    g.beginPath(); g.arc(mx(p.x), mz(p.z), 5, 0, Math.PI * 2); g.fill();
+    g.restore();
+    g.strokeStyle = '#ffffff'; g.lineWidth = 3;
+    g.beginPath(); g.arc(cx, cy, R, 0, Math.PI * 2); g.stroke();
+    // Message feed, bottom-centre.
+    g.font = '14px sans-serif'; g.textAlign = 'center';
+    sim.messages.slice(0, 3).forEach((m, i) => {
+      g.fillStyle = 'rgba(0,0,0,0.6)';
+      const w = g.measureText(m.text).width;
+      g.fillRect(W / 2 - w / 2 - 10, H - 150 - i * 26, w + 20, 22);
+      g.fillStyle = '#ffffff'; g.fillText(m.text, W / 2, H - 134 - i * 26);
+    });
+    g.textAlign = 'left';
+    // Vignettes: red when hurt, flashing red/blue when wanted.
+    if (p.health < 45) {
+      const grad = g.createRadialGradient(W / 2, H / 2, H * 0.35, W / 2, H / 2, H * 0.75);
+      grad.addColorStop(0, 'rgba(255,0,0,0)'); grad.addColorStop(1, 'rgba(255,0,0,0.45)');
+      g.fillStyle = grad; g.fillRect(0, 0, W, H);
+    }
+    if (p.wanted > 0 && Math.sin(sim.time * 5) > 0) {
+      g.fillStyle = 'rgba(255,0,0,0.06)'; g.fillRect(0, 0, W, H);
+    }
+    if (sim.over) {
+      g.fillStyle = 'rgba(0,0,0,0.7)'; g.fillRect(0, 0, W, H);
+      g.fillStyle = '#ffd23a'; g.font = 'bold 42px sans-serif'; g.textAlign = 'center';
+      g.fillText('PORTO VERDE IS YOURS', W / 2, H / 2 - 10);
+      g.fillStyle = '#ffffff'; g.font = '18px sans-serif';
+      g.fillText('All five jobs done — debt paid.', W / 2, H / 2 + 26);
+      g.textAlign = 'left';
+    }
   }
 
-  // --- screens ------------------------------------------------------------------------
-  const screen = document.getElementById('screen');
-  function showScreen(html) {
-    screen.innerHTML = html;
-    screen.style.display = 'flex';
+  function missionTargetText(sim) {
+    return sim.mission ? sim.mission.objective : '';
   }
-  function hideScreen() {
-    screen.style.display = 'none';
-    screen.innerHTML = '';
+  function currentTarget(sim) {
+    // Re-exported via sim module at runtime: import cycle avoided by
+    // reading the target from the sim's own mission state in main.js.
+    return sim._target || null;
   }
 
-  function showTitle() {
-    const save = game.loadGame();
-    const hasSave = save && (save.cash > 0 || save.missionIndex > 0);
-    const savedLine = hasSave
-      ? `<p class="save-line">Save found — $${(save.cash || 0).toLocaleString('en-US')} · Mission ${Math.min((save.missionIndex || 0) + 1, MISSIONS.length)} of ${MISSIONS.length}</p>`
-      : '';
-    const continueBtn = hasSave ? '<button id="btn-continue" class="menu-btn">CONTINUE</button>' : '';
-    showScreen(`
-      <div class="panel">
-        <h1>${GAME_TITLE}</h1>
-        <p class="tagline">${GAME_SUBTITLE}</p>
-        <p class="story">${STORY.join('<br>')}</p>
-        ${savedLine}
-        <div class="menu-row">
-          <button id="btn-start" class="menu-btn primary">START</button>
-          ${continueBtn}
-        </div>
-        <p class="hint">WASD move · Shift run · Space jump · E enter/exit car · F punch · Click shoot · R reload · P pause</p>
-        <p class="hint small">Original game made for the make.fun GTA 6 bounty. No Rockstar assets, names or maps.</p>
-      </div>
-    `);
-    document.getElementById('btn-start').addEventListener('click', () => window.__startGame(false));
-    const cont = document.getElementById('btn-continue');
-    if (cont) cont.addEventListener('click', () => window.__startGame(true));
-  }
-
-  function showPause() {
-    showScreen(`
-      <div class="panel">
-        <h1>PAUSED</h1>
-        <p class="story">Porto Verde waits for no one — except right now.</p>
-        <div class="menu-row">
-          <button id="btn-resume" class="menu-btn primary">RESUME</button>
-          <button id="btn-quit" class="menu-btn">QUIT TO TITLE</button>
-        </div>
-      </div>
-    `);
-    document.getElementById('btn-resume').addEventListener('click', () => window.__resumeGame());
-    document.getElementById('btn-quit').addEventListener('click', () => window.__quitToTitle());
-  }
-
-  function showEnd(kind) {
-    const s = game.state;
-    const isBusted = kind === 'busted';
-    const lost = Math.floor(s.cash * 0.1);
-    showScreen(`
-      <div class="panel">
-        <h1 class="${isBusted ? 'busted' : 'wasted'}">${isBusted ? 'BUSTED' : 'WASTED'}</h1>
-        <p class="story">${isBusted ? 'The Verde PD took you in.' : 'Porto Verde chewed you up.'}</p>
-        <p class="story">You lost $${lost.toLocaleString('en-US')} (10% of your cash).</p>
-        <div class="menu-row">
-          <button id="btn-again" class="menu-btn primary">TRY AGAIN</button>
-          <button id="btn-quit2" class="menu-btn">QUIT TO TITLE</button>
-        </div>
-      </div>
-    `);
-    document.getElementById('btn-again').addEventListener('click', () => window.__respawnAfterEnd(isBusted ? 'garage' : 'hospital'));
-    document.getElementById('btn-quit2').addEventListener('click', () => window.__quitToTitle());
-  }
-
-  function render(dt) {
-    updateCamera(dt);
-    if (game.state.mode === 'play' || game.state.mode === 'paused') updateHUD();
-    renderer.render(scene, camera);
-  }
-
-  function resize() {
-    camera.aspect = window.innerWidth / window.innerHeight;
-    camera.updateProjectionMatrix();
-    renderer.setSize(window.innerWidth, window.innerHeight);
-  }
-  window.addEventListener('resize', resize);
-
-  return { renderer, scene, camera, camState, render, showTitle, showPause, showEnd, hideScreen, updateHUD };
+  return {
+    renderer, scene, camera, hud, city,
+    resize() {
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      hud.width = window.innerWidth; hud.height = window.innerHeight;
+    },
+    frame(input, dt) {
+      syncMeshes();
+      const p = sim.player;
+      playerGroup.visible = !p.inCar;
+      playerGroup.position.set(p.x, p.y, p.z);
+      playerGroup.rotation.y = p.angle;
+      // Beacon follows the live mission target.
+      const t = sim._target;
+      if (t) {
+        beacon.position.set(t.x, 21, t.z);
+        beaconRing.position.set(t.x, 0.4, t.z);
+        beacon.visible = beaconRing.visible = true;
+      } else { beacon.visible = beaconRing.visible = false; }
+      // Chase camera: behind the player/car, orbit yaw from the mouse.
+      const yaw = input.camYaw;
+      const dist = p.inCar ? 13 : 10;
+      const height = p.inCar ? 5.5 : 4.5;
+      const cx = p.x - Math.sin(yaw) * dist;
+      const cz = p.z - Math.cos(yaw) * dist;
+      camera.position.set(cx, p.y + height, cz);
+      camera.lookAt(p.x, p.y + 1.6, p.z);
+      renderer.render(scene, camera);
+      drawHud(input);
+    },
+  };
 }
