@@ -85,21 +85,20 @@ export function applyShot(state, kind) {
     p.y = car.y;
   } else if (kind === 'chase') {
     startMission(state, 4); // The Marlin's Due: a getaway with the money.
-    addHeat(state, 100); // Exactly 3 stars (bands: 80–130).
+    addHeat(state, 140); // 3 stars.
     const car = state.cars.find((c) => c.driver === 'traffic' && !c.parked) || state.cars[0];
     car.driver = 'player';
     car.speed = 380;
     car.angle = 0;
-    // Stage the chase mid-city on avenue 3, driving east, cruisers in frame.
-    car.x = 1032;
-    car.y = 1032;
     p.inCar = car.id;
     p.x = car.x;
     p.y = car.y;
     p.angle = 0;
+    // Two cruisers closing in from behind, staged far enough out that the
+    // shot catches the chase, not the bust.
     state.cops = [
-      { x: car.x - 220, y: car.y - 34, angle: 0, speed: 300 },
-      { x: car.x - 330, y: car.y + 38, angle: 0, speed: 300 },
+      { x: car.x - 420, y: car.y - 40, angle: 0, speed: 300 },
+      { x: car.x - 520, y: car.y + 46, angle: 0, speed: 300 },
     ];
     state.copSpawnTimer = 999;
   }
