@@ -3,9 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Porto Verde — an original open-world crime game built for make.fun's Make GTA 6 bounty. Dante Marlow, five jobs, one week.">
+<meta name="theme-color" content="#ffb36b">
 <title>Porto Verde — An Open-World Crime Story</title>
 <style>
-  html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #ffb36b; font-family: sans-serif; }
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #ffb36b; font-family: sans-serif; touch-action: none; user-select: none; }
   #game3d, #hud { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
   #hud { pointer-events: none; }
   .overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(20, 12, 8, 0.72); color: #fff; text-align: center; z-index: 5; }
@@ -14,6 +16,7 @@
   .panel p { font-size: 16px; line-height: 1.5; }
   .panel button { margin: 8px; padding: 12px 28px; font-size: 18px; font-weight: bold; background: #ffd23a; color: #222; border: none; border-radius: 8px; cursor: pointer; }
   .panel button:hover { background: #ffe27a; }
+  .panel button:focus-visible { outline: 3px solid #ffffff; outline-offset: 2px; }
   #pause { display: none; }
   #pause .panel h1 { font-size: 36px; }
 </style>
@@ -28,8 +31,8 @@
   <div class="panel">
     <h1>PORTO VERDE</h1>
     <p id="title-text"></p>
-    <button id="start-btn">NEW GAME</button>
-    <button id="continue-btn">CONTINUE</button>
+    <button id="start-btn" aria-label="Start a new game">NEW GAME</button>
+    <button id="continue-btn" aria-label="Continue from the saved game">CONTINUE</button>
     <p style="font-size:13px;color:#ccc">Original city, story and characters. No Rockstar / GTA assets. Sound: M mute.</p>
   </div>
 </div>

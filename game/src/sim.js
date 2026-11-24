@@ -1,6 +1,15 @@
 // Simulation: the whole game state and its rules, no rendering here.
 // Player on foot or in a car, traffic, pedestrians, Verde PD, wanted
 // level, combat and the five-mission story. Render reads this state.
+//
+// Round 2 fixes (gameplay only, no visual change):
+// - shoot() used to hit a *copy* of each foot officer, so officer damage
+//   never stuck and officers could not be shot down. It now targets the
+//   live officer objects, like punch() already did.
+// - Police spawn ids used sim.time (seconds), so two officers spawned in
+//   the same second shared an id. A monotonic counter makes them unique.
+// - Mission 5 rams now have a 1s cooldown, so one long scrape cannot
+//   count twice in consecutive frames.
 import { CONFIG, CAR_DEFS, MISSIONS } from './config.js';
 import { hitsCollider, clampToWorld, ROAD_AXES } from './city.js';
 
@@ -18,6 +27,8 @@ export function createSim(city, rng) {
     cars: [], peds: [], policeFoot: [], rivals: [], rivalCar: null,
     missionIndex: 0, mission: null, missionTimer: 0, missionHits: 0,
     messages: [], effects: [], shotsFired: 0,
+    // Round 2: unique police ids + ram cooldown bookkeeping.
+    _policeSeq: 0, _ramAt: -99,
   };
   // Parked cars the player can steal, near the garage and the plaza.
   const parked = [
@@ -64,6 +75,15 @@ export function addWanted(sim, n) {
   p.wanted = Math.min(CONFIG.maxWanted, p.wanted + n);
   p.crimeTimer = 0;
   if (n > 0) say(sim, `Wanted level ${p.wanted} — Verde PD is on you!`);
+}
+
+// Reload the mag. No-op (and silent) when the mag is already full.
+export function reload(sim, audio) {
+  const p = sim.player;
+  if (p.ammo >= CONFIG.magSize) return false;
+  p.ammo = CONFIG.magSize;
+  if (audio) audio.pickup();
+  return true;
 }
 
 export function startMission(sim, idx) {
@@ -152,8 +172,10 @@ export function shoot(sim, audio) {
   if (p.ammo <= 0) { say(sim, 'Mag empty — press R to reload.'); return; }
   p.ammo--; sim.shotsFired++;
   if (audio) audio.shoot();
+  // Targets are the LIVE rival / officer objects: damage must stick.
+  // (Round 1 spread-copied officers here, so their health never dropped.)
   const targets = [...sim.rivals.filter(r => r.alive),
-    ...sim.policeFoot.map(o => ({ ...o, police: true }))];
+    ...sim.policeFoot.map(o => { o.police = true; return o; })];
   let best = null, bd = CONFIG.shootRange;
   for (const t of targets) {
     const d = dist2(p.x, p.z, t.x, t.z);
@@ -165,7 +187,7 @@ export function shoot(sim, audio) {
     addWanted(sim, best.police ? 1 : 0);
     if (best.health <= 0) {
       if (best.id && best.id.startsWith('rival')) { best.alive = false; say(sim, 'Rival down!'); }
-      else { sim.policeFoot = sim.policeFoot.filter(o => o !== best && o.id !== best.id); }
+      else { sim.policeFoot = sim.policeFoot.filter(o => o.id !== best.id); say(sim, 'Officer down!'); }
     }
   }
 }
@@ -235,9 +257,11 @@ function updateDrive(sim, input, dt, audio) {
   } else { c.x = nx; c.z = nz; }
   const cc = clampToWorld(c.x, c.z); c.x = cc.x; c.z = cc.z;
   p.x = c.x; p.z = c.z; p.angle = c.angle;
-  // Ram the rival coupe in mission 5.
+  // Ram the rival coupe in mission 5 — one counted hit per cooldown.
   if (sim.missionIndex === 4 && sim.rivalCar && sim.missionHits < 3) {
-    if (dist2(c.x, c.z, sim.rivalCar.x, sim.rivalCar.z) < 4.5 && Math.abs(c.speed) > 7) {
+    if (dist2(c.x, c.z, sim.rivalCar.x, sim.rivalCar.z) < 4.5 && Math.abs(c.speed) > 7
+      && sim.time - sim._ramAt >= CONFIG.ramCooldownSeconds) {
+      sim._ramAt = sim.time;
       sim.missionHits++;
       sim.rivalCar.health -= 40;
       say(sim, `Ram ${sim.missionHits}/3 — the coupe is hurting!`);
@@ -293,16 +317,16 @@ function updatePolice(sim, dt, audio) {
   const p = sim.player;
   const wantCars = p.wanted >= 2 ? Math.min(3, p.wanted - 1) : 0;
   const wantFoot = p.wanted >= 1 ? Math.min(3, p.wanted) : 0;
-  // Spawn police cars.
+  // Spawn police cars (ids from a counter, never from the clock).
   const cars = sim.cars.filter(c => c.police);
   while (cars.length < wantCars) {
-    const c = makeCar(`pd${sim.time.toFixed(0)}-${cars.length}`, CAR_DEFS[5],
+    const c = makeCar(`pd${sim._policeSeq++}`, CAR_DEFS[5],
       p.x + sim.rng.range(35, 55) * (sim.rng.chance(0.5) ? 1 : -1),
       p.z + sim.rng.range(35, 55) * (sim.rng.chance(0.5) ? 1 : -1), 0);
     c.police = true; sim.cars.push(c); cars.push(c);
   }
   while (sim.policeFoot.length < wantFoot) {
-    sim.policeFoot.push({ id: `officer${sim.time.toFixed(0)}-${sim.policeFoot.length}`,
+    sim.policeFoot.push({ id: `officer${sim._policeSeq++}`,
       x: p.x + sim.rng.range(18, 28) * (sim.rng.chance(0.5) ? 1 : -1),
       z: p.z + sim.rng.range(18, 28) * (sim.rng.chance(0.5) ? 1 : -1),
       angle: 0, health: 60 });

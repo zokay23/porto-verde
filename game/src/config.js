@@ -1,5 +1,7 @@
 // Porto Verde tuning: every number the city, the driving and the missions
 // share lives here, so a balance change is one edit, not a hunt.
+// Round 2: added saveIntervalSeconds and ramCooldownSeconds (used by
+// main.js / sim.js). All round-1 values below are unchanged.
 export const CONFIG = {
   seed: 7,
   // City grid: 6 x 6 blocks, roads on a regular lattice.
@@ -36,6 +38,10 @@ export const CONFIG = {
   // Missions pay out in cash; mission 2 is timed.
   mission2Seconds: 90,
   saveKey: 'porto-verde-save-v1',
+  // How often (seconds of game time) the autosave runs, and the minimum
+  // gap between two counted rams on the rival coupe in mission 5.
+  saveIntervalSeconds: 0.5,
+  ramCooldownSeconds: 1.0,
 };
 
 export const PALETTE = {

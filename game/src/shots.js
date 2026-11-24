@@ -2,6 +2,11 @@
 // Auto-starts the game, places the player / police / rivals and sets the
 // mission state for each of the four named scenes, so a headless browser
 // can take a real render with no input at all.
+//
+// Round 2: unknown shot names now warn and return null instead of
+// staging a half-initialised scene, and staged players are explicitly
+// grounded (y/vy = 0). All four staged scenes are byte-for-byte the
+// round-1 values, so the existing screenshots stay accurate.
 import { CONFIG } from './config.js';
 
 export function shotName() {
@@ -10,6 +15,11 @@ export function shotName() {
 }
 
 export function applyShot(sim, name) {
+  const known = ['action', 'drive', 'mission', 'chase'];
+  if (!known.includes(name)) {
+    console.warn(`Porto Verde: unknown shot "${name}", expected one of ${known.join(', ')}`);
+    return null;
+  }
   const p = sim.player;
   const garage = sim.city.landmarks.garage;
   const marlin = sim.city.landmarks.marlin;
@@ -18,6 +28,7 @@ export function applyShot(sim, name) {
   // then stages its own scene.
   sim.started = true;
   sim.messages = [];
+  p.y = 0; p.vy = 0; // staged players stand on the ground, never mid-jump
   if (name === 'action') {
     // On foot at the plaza, 3 stars, officers closing in, mission 4.
     p.x = 0; p.z = 12; p.angle = 0.6; p.health = 72; p.cash = 640; p.ammo = 9;

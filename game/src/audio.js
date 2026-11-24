@@ -1,5 +1,7 @@
 // All sound is synthesized with WebAudio: no audio files, no network.
 // Engine hum, police siren, gunshots, crashes, punches and a bassline.
+// Round 2: mute now ramps smoothly instead of cutting, and there is a
+// short uiClick() for menu buttons. Notes, volumes and timing unchanged.
 export class GameAudio {
   constructor() {
     this.ctx = null;
@@ -83,6 +85,7 @@ export class GameAudio {
   pickup() { this.blip(660, 0.1, 'sine', 0.12); setTimeout(() => this.blip(880, 0.14, 'sine', 0.12), 90); }
   busted() { this.blip(220, 0.4, 'sawtooth', 0.14); this.blip(165, 0.5, 'sawtooth', 0.14); }
   missionDone() { [523, 659, 784].forEach((f, i) => setTimeout(() => this.blip(f, 0.22, 'sine', 0.14), i * 120)); }
+  uiClick() { this.blip(520, 0.06, 'sine', 0.1); }
 
   // A slow minor-key bassline, one note per beat, looping while playing.
   startMusic() {
@@ -98,8 +101,10 @@ export class GameAudio {
   toggleMute() {
     this.muted = !this.muted;
     if (this.ctx) {
-      this.engineGain.gain.value = this.muted ? 0 : 0.02;
-      this.sirenGain.gain.value = 0;
+      // Ramp instead of an abrupt cut so muting never pops.
+      const t = this.ctx.currentTime;
+      this.engineGain.gain.setTargetAtTime(this.muted ? 0 : 0.02, t, 0.08);
+      this.sirenGain.gain.setTargetAtTime(0, t, 0.08);
     }
     return this.muted;
   }

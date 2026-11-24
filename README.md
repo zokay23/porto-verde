@@ -43,7 +43,8 @@ No build step: `game/index.html` loads vendored three.js r180 from
   mission beacon, police and rival blips.
 - **Save / continue** — mission progress and cash persist in
   localStorage; the title screen offers CONTINUE when a save exists.
-  `P` pauses, `M` mutes.
+  `P` pauses (the game also auto-pauses when the tab is hidden),
+  `M` mutes.
 - **Sound** — everything is synthesized with WebAudio: engine hum,
   police siren, gunshots, crashes, a bassline while you play. No audio
   files.
@@ -82,6 +83,26 @@ No build step: `game/index.html` loads vendored three.js r180 from
 The four shots (`?shot=<name>&seed=7`): on-foot action at 3 stars,
 a high-speed drive past the garage beacon, the timed Marlin Club
 delivery, and a 4-star police chase on the main road.
+
+## Round 2 polish
+
+Rebuilt from scratch for round 2. Same city, seed, camera and HUD, so
+the screenshots above stay accurate. What changed under the hood:
+
+- **Combat fix** — shooting a foot officer now damages the real officer
+  (round 1 hit a copy, so officers could never be shot down).
+- **Police ids** — spawned officers/cars get ids from a counter instead
+  of the wall clock, so two spawns in one second can no longer collide.
+- **Mission 5 rams** — a 1-second cooldown stops one long scrape from
+  counting twice.
+- **Reload** — `R` is a no-op (and silent) when the mag is already full.
+- **Auto-pause** — hiding the tab pauses the game instead of leaving
+  Dante busted while away.
+- **Audio** — muting ramps smoothly instead of cutting, plus a menu click.
+- **Rendering** — despawned police meshes are disposed instead of leaking.
+- **Tooling** — playtest has a 90s watchdog, `shots.py` waits for the
+  server and takes `--out-dir`, `serve.ts` answers HEAD with no-store
+  headers, and `main.ts` verifies the game copy before building.
 
 ## License
 

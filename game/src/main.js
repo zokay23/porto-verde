@@ -1,9 +1,13 @@
 // Boot + game loop for Porto Verde.
 // Input, title screen, pause, save, and the per-frame wiring between
 // the sim, the renderer and the audio synth.
+//
+// Round 2: R now goes through sim.reload() (silent when the mag is
+// already full), autosave uses CONFIG.saveIntervalSeconds, the game
+// auto-pauses when the tab is hidden, and menu buttons click audibly.
 import { makeRng } from './random.js';
 import { CONFIG, STORY } from './config.js';
-import { createSim, updateSim, missionTarget, enterCar, exitCar, shoot, punch, saveGame, loadSave, startMission } from './sim.js';
+import { createSim, updateSim, missionTarget, enterCar, exitCar, shoot, punch, reload, saveGame, loadSave, startMission } from './sim.js';
 import { createRenderer } from './render.js';
 import { GameAudio } from './audio.js';
 import { shotName, applyShot, seedFromUrl } from './shots.js';
@@ -36,6 +40,7 @@ function refreshTitle() {
 
 function beginGame(fromSave) {
   audio.ensure();
+  audio.uiClick();
   if (fromSave) {
     const save = loadSave();
     if (save) {
@@ -51,6 +56,12 @@ function beginGame(fromSave) {
 startBtn.addEventListener('click', () => beginGame(false));
 continueBtn.addEventListener('click', () => beginGame(true));
 
+function setPaused(paused) {
+  if (!sim.started) return;
+  sim.paused = paused;
+  pauseEl.style.display = paused ? 'block' : 'none';
+}
+
 window.addEventListener('keydown', (e) => {
   if (e.repeat) return;
   const k = e.key.toLowerCase();
@@ -64,14 +75,8 @@ window.addEventListener('keydown', (e) => {
     if (sim.player.inCar) exitCar(sim); else enterCar(sim, audio);
   }
   if (k === 'f' && sim.started && !sim.paused && !sim.player.inCar) punch(sim, audio);
-  if (k === 'r' && sim.started) {
-    sim.player.ammo = CONFIG.magSize;
-    audio.pickup();
-  }
-  if (k === 'p' && sim.started) {
-    sim.paused = !sim.paused;
-    pauseEl.style.display = sim.paused ? 'block' : 'none';
-  }
+  if (k === 'r' && sim.started) reload(sim, audio);
+  if (k === 'p' && sim.started) setPaused(!sim.paused);
   if (k === 'm') audio.toggleMute();
 });
 window.addEventListener('keyup', (e) => {
@@ -97,6 +102,11 @@ window.addEventListener('mousemove', (e) => {
   lastX = e.clientX; lastY = e.clientY;
 });
 window.addEventListener('resize', () => view.resize());
+// Switching tabs mid-chase used to leave the sim running unseen;
+// pause instead so the player is never busted while away.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && sim.started && !sim.paused) setPaused(true);
+});
 
 // Screenshot mode: stage the scene, hide the title, and hold the sim
 // still so the render is exactly the staged moment.
@@ -122,7 +132,8 @@ function loop(now) {
   sim._target = sim.mission ? missionTarget(sim) : null;
   if (sim.started && !sim.paused && !sim.shotMode) {
     updateSim(sim, input, dt, audio);
-    if (Math.floor(sim.time * 2) !== Math.floor((sim.time - dt) * 2)) saveGame(sim);
+    const interval = CONFIG.saveIntervalSeconds;
+    if (Math.floor(sim.time / interval) !== Math.floor((sim.time - dt) / interval)) saveGame(sim);
   }
   view.frame(input, dt);
   requestAnimationFrame(loop);

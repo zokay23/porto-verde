@@ -2,6 +2,10 @@
 // 2D canvas HUD on top (cash, wanted stars, health, mission, speed,
 // ammo, message feed and a circular minimap). No DOM text is used for
 // the HUD, so it shows up identically in screenshots.
+//
+// Round 2: meshes removed from the scene (despawned police cars and
+// officers) now have their geometries/materials disposed instead of
+// leaking GPU memory. Camera, layout, colours and sizes are unchanged.
 import * as THREE from 'three';
 import { CONFIG, MISSIONS } from './config.js';
 import { buildCity } from './city.js';
@@ -45,6 +49,17 @@ export function createRenderer(sim, rng) {
   const pedMeshes = new Map();
   const rivalMeshes = new Map();
   const officerMeshes = new Map();
+
+  // Free GPU resources for a group that leaves the scene.
+  function disposeGroup(g) {
+    g.traverse((child) => {
+      if (child.geometry) child.geometry.dispose();
+      if (child.material) {
+        const mats = Array.isArray(child.material) ? child.material : [child.material];
+        for (const m of mats) { if (m.map) m.map.dispose(); m.dispose(); }
+      }
+    });
+  }
 
   function carMesh(car) {
     const g = new THREE.Group();
@@ -91,7 +106,7 @@ export function createRenderer(sim, rng) {
       if (bar) bar.material.color.setHex(car.flash ? 0xff2222 : 0x2244ff);
     }
     for (const [id, m] of [...carMeshes]) {
-      if (!sim.cars.some(c => c.id === id)) { scene.remove(m); carMeshes.delete(id); }
+      if (!sim.cars.some(c => c.id === id)) { scene.remove(m); disposeGroup(m); carMeshes.delete(id); }
     }
     for (const ped of sim.peds) {
       let m = pedMeshes.get(ped.id);
@@ -110,7 +125,7 @@ export function createRenderer(sim, rng) {
       m.position.set(o.x, 0, o.z); m.rotation.y = o.angle;
     }
     for (const [id, m] of [...officerMeshes]) {
-      if (!sim.policeFoot.some(o => o.id === id)) { scene.remove(m); officerMeshes.delete(id); }
+      if (!sim.policeFoot.some(o => o.id === id)) { scene.remove(m); disposeGroup(m); officerMeshes.delete(id); }
     }
   }
 
@@ -126,7 +141,7 @@ export function createRenderer(sim, rng) {
     g.fillText(sim.mission ? sim.mission.title : '', 28, 70);
     g.font = '13px sans-serif'; g.fillStyle = '#ffd23a';
     const target = sim.mission ? missionTargetText(sim) : '';
-    g.fillText(target, 28, 84 - 0); // objective line, kept short for the HUD
+    g.fillText(target, 28, 84); // objective line, kept short for the HUD
     // Top-centre: objective + live distance, big and readable.
     const t = sim.mission ? currentTarget(sim) : null;
     if (t) {
@@ -155,12 +170,12 @@ export function createRenderer(sim, rng) {
     g.fillText(p.inCar ? p.inCar.def.name : 'On foot', W - 210, H - 40);
     g.fillStyle = '#ffd23a';
     g.fillText(`AMMO ${p.ammo}/${CONFIG.magSize}  •  R reload`, W - 210, H - 20);
-    // Bottom-left: health bar above the minimap.
+    // Bottom-left: health bar above the minimap (width clamped to the bar).
     const hx = 24, hy = H - 250;
     g.fillStyle = 'rgba(0,0,0,0.55)'; g.fillRect(hx - 8, hy - 8, 204, 30);
     g.fillStyle = '#333'; g.fillRect(hx, hy, 188, 14);
     g.fillStyle = p.health > 40 ? '#4ade80' : '#ff4444';
-    g.fillRect(hx, hy, 188 * Math.max(0, p.health / 100), 14);
+    g.fillRect(hx, hy, 188 * Math.max(0, Math.min(1, p.health / 100)), 14);
     // Minimap: whole city, circular, bottom-left.
     const cx = 120, cy = H - 120, R = 96;
     g.save();

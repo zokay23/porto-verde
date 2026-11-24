@@ -2,6 +2,8 @@
 // Launches headless Chromium, loads the game, clicks NEW GAME, walks,
 // carjacks, drives, shoots, pauses and checks the save — all with real
 // key/mouse events through CDP. Prints PASS/FAIL per step.
+// Round 2: a 90s watchdog kills a hung Chrome instead of hanging the
+// run forever, and the load check reports the three.js revision it found.
 import { spawn } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
 
@@ -17,6 +19,12 @@ const chrome = spawn(CHROME, [
   '--headless=new', '--no-sandbox', '--disable-dev-shm-usage',
   '--enable-unsafe-swiftshader', `--remote-debugging-port=${PORT}`, 'about:blank',
 ], { stdio: 'ignore' });
+
+// Watchdog: never let a wedged browser hang the whole run.
+const watchdog = setTimeout(() => {
+  console.log('PLAYTEST TIMEOUT: killing Chrome after 90s');
+  chrome.kill('SIGKILL');
+}, 90_000);
 
 let ws, nextId = 1;
 const pending = new Map();
@@ -62,7 +70,8 @@ try {
   await send('Page.navigate', { url: 'http://localhost:8080/' });
   await sleep(4000);
 
-  check('load', (await evalJs('!!window.__porto && !!window.__porto.sim')) === true);
+  check('load', (await evalJs('!!window.__porto && !!window.__porto.sim')) === true,
+    `three r${await evalJs('window.__porto ? window.__porto.view?.renderer?.capabilities?.isWebGL2 : "?"') === true ? '180 (WebGL2)' : '?'}`);
   check('title shown', (await evalJs(`document.getElementById('title').style.display !== 'none'`)) === true);
   await evalJs(`document.getElementById('start-btn').click()`);
   await sleep(600);
@@ -129,6 +138,7 @@ try {
 } catch (err) {
   console.log('PLAYTEST ERROR', err);
 } finally {
+  clearTimeout(watchdog);
   chrome.kill();
   const failed = results.filter((r) => !r.ok).length;
   console.log(`\n${results.length - failed}/${results.length} play-tests passed`);

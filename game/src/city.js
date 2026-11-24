@@ -3,6 +3,10 @@
 // a beach and sea to the south, and the garage / Marlin Club at opposite
 // corners. buildCity adds the meshes to the scene and returns the data
 // the simulation needs: colliders, road axes and landmark positions.
+//
+// Round 2: build order and every RNG draw are unchanged (same city,
+// same screenshots), plus two pure helpers — isInPlaza() and
+// landmarkById() — for the sim and the HUD.
 import { CONFIG, PALETTE } from './config.js';
 
 export const ROAD_AXES = [-150, -100, -50, 0, 50, 100, 150];
@@ -12,6 +16,15 @@ export function roadAxisNear(v) {
   let best = ROAD_AXES[0];
   for (const a of ROAD_AXES) if (Math.abs(a - v) < Math.abs(best - v)) best = a;
   return best;
+}
+
+// True when a point is on the central plaza slab (kept open for fights).
+export function isInPlaza(x, z) {
+  return Math.abs(x) <= 19 && Math.abs(z) <= 19;
+}
+
+export function landmarkById(landmarks, id) {
+  return landmarks[id] || null;
 }
 
 function windowTexture(THREE, rng, baseColor) {
