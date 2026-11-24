@@ -3,41 +3,35 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="Porto Verde — an original open-world crime game built for make.fun's Make GTA 6 bounty. Dante Marlow, five jobs, one week.">
-<meta name="theme-color" content="#ffb36b">
-<title>Porto Verde — An Open-World Crime Story</title>
+<meta name="description" content="Porto Verde — an original open-world crime game for the Make GTA 6 bounty. Five missions, Verde PD, and a 6x6 procedural city.">
+<title>Porto Verde — Make GTA 6</title>
 <style>
-  html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #ffb36b; font-family: sans-serif; touch-action: none; user-select: none; }
-  #game3d, #hud { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
-  #hud { pointer-events: none; }
-  .overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(20, 12, 8, 0.72); color: #fff; text-align: center; z-index: 5; }
-  .panel { max-width: 640px; padding: 32px; background: rgba(0,0,0,0.6); border: 2px solid #ffd23a; border-radius: 12px; }
-  .panel h1 { margin: 0 0 8px; font-size: 52px; letter-spacing: 2px; color: #ffd23a; }
-  .panel p { font-size: 16px; line-height: 1.5; }
-  .panel button { margin: 8px; padding: 12px 28px; font-size: 18px; font-weight: bold; background: #ffd23a; color: #222; border: none; border-radius: 8px; cursor: pointer; }
-  .panel button:hover { background: #ffe27a; }
-  .panel button:focus-visible { outline: 3px solid #ffffff; outline-offset: 2px; }
-  #pause { display: none; }
-  #pause .panel h1 { font-size: 36px; }
+  html, body { margin: 0; padding: 0; background: #0c0e12; height: 100%; overflow: hidden; font-family: system-ui, sans-serif; }
+  #wrap { display: flex; align-items: center; justify-content: center; height: 100vh; }
+  #game { background: #20242a; display: block; }
+  #overlay { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(5, 6, 10, 0.72); z-index: 10; }
+  #overlay.hidden { display: none; }
+  #panel { text-align: center; color: #fff; max-width: 640px; padding: 32px; }
+  #overlay-title { font-size: 56px; letter-spacing: 6px; margin: 0 0 12px; color: #ffe600; text-shadow: 0 4px 0 #7a2e0e; }
+  #overlay-text { font-size: 17px; line-height: 1.5; color: #ddd; margin: 0 0 28px; }
+  .btn { display: inline-block; margin: 0 8px; padding: 14px 30px; font-size: 17px; font-weight: 700; color: #111; background: #ffe600; border: 0; border-radius: 8px; cursor: pointer; }
+  .btn.secondary { background: #fff; }
+  .btn:hover { filter: brightness(1.1); }
+  .btn.hidden { display: none; }
+  #foot { margin-top: 26px; font-size: 13px; color: #999; }
 </style>
-<script type="importmap">
-{ "imports": { "three": "./vendor/three.module.min.js" } }
-</script>
 </head>
 <body>
-<canvas id="game3d"></canvas>
-<canvas id="hud"></canvas>
-<div id="title" class="overlay">
-  <div class="panel">
-    <h1>PORTO VERDE</h1>
-    <p id="title-text"></p>
-    <button id="start-btn" aria-label="Start a new game">NEW GAME</button>
-    <button id="continue-btn" aria-label="Continue from the saved game">CONTINUE</button>
-    <p style="font-size:13px;color:#ccc">Original city, story and characters. No Rockstar / GTA assets. Sound: M mute.</p>
+<div id="wrap"><canvas id="game" width="1280" height="720"></canvas></div>
+<div id="overlay">
+  <div id="panel">
+    <h1 id="overlay-title">PORTO VERDE</h1>
+    <p id="overlay-text"></p>
+    <button class="btn" id="btn-new">NEW GAME</button>
+    <button class="btn secondary" id="btn-continue">CONTINUE</button>
+    <button class="btn" id="btn-resume">RESUME</button>
+    <div id="foot">WASD move · Shift run · Space jump · E car · F punch · Click shoot · R reload · P pause · M mute<br>An original open-world crime game. No network. Your save stays in this browser.</div>
   </div>
-</div>
-<div id="pause" class="overlay">
-  <div class="panel"><h1>PAUSED</h1><p>Press P to keep playing. Progress saves automatically.</p></div>
 </div>
 <script type="module" src="./src/main.js"></script>
 </body>

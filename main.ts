@@ -1,39 +1,34 @@
-// Dossier builder for Porto Verde (make.fun gta6-01).
-// Plain Node 22, standard library only: copies game/ and screenshots/
-// beside this file to /output and writes /output/dossier.json with the
-// vendored make.fun library buildDossier, byte for byte what the scorer
-// rebuilds. Run: mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
-//
-// Round 2: verifies the game copy landed before building the dossier
-// and prints the dossier size, so a silent partial copy is caught here
-// instead of at submission time.
-import { cpSync, existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { buildDossier } from './vendor/makefun-game.ts';
+// main.ts — Porto Verde entrypoint: copies game/ and screenshots/ into the
+// output directory and writes out/dossier.json with make.fun's buildDossier.
+// Node standard library only. Run: MAKEFUN_OUTPUT_DIR=out node main.ts
 
-const here = fileURLToPath(new URL('.', import.meta.url));
-const out = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
+import { cpSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { buildDossier, DOSSIER_MAX_BYTES } from './vendor/makefun-game.ts';
 
-mkdirSync(out, { recursive: true });
-cpSync(join(here, 'game'), join(out, 'game'), { recursive: true });
-if (!existsSync(join(out, 'game', 'index.html'))) {
-  throw new Error('game/ copy failed: out/game/index.html is missing');
-}
-mkdirSync(join(out, 'screenshots'), { recursive: true });
-if (existsSync(join(here, 'screenshots'))) {
-  cpSync(join(here, 'screenshots'), join(out, 'screenshots'), { recursive: true });
+const outDir = resolve(process.env.MAKEFUN_OUTPUT_DIR || '/output');
+const repoRoot = resolve(import.meta.dirname);
+
+mkdirSync(outDir, { recursive: true });
+for (const dir of ['game', 'screenshots']) {
+  const src = join(repoRoot, dir);
+  if (!existsSync(src)) throw new Error(`main.ts: missing ${dir}/ in ${repoRoot}`);
+  cpSync(src, join(outDir, dir), { recursive: true });
 }
 
-// The scorer's own caps (reference/gate.json): only text_max_bytes shapes
-// the bytes; the others refuse an entry the scorer would refuse.
-const dossier = buildDossier(out, {
+const dossier = buildDossier(outDir, {
   text_max_bytes: 163840,
   screenshots: { max: 4, max_bytes: 262144 },
   game_max_files: 993,
   game_max_bytes: 50331648,
-  game_path_max_bytes: 1000,
 });
-writeFileSync(join(out, 'dossier.json'), dossier);
-console.log('Porto Verde dossier written to', join(out, 'dossier.json'),
-  `(${statSync(join(out, 'dossier.json')).size} bytes)`);
+
+if (dossier.length > DOSSIER_MAX_BYTES) {
+  throw new Error(`main.ts: dossier ${dossier.length} bytes exceeds ${DOSSIER_MAX_BYTES}`);
+}
+if (!existsSync(join(repoRoot, 'game', 'index.html'))) {
+  throw new Error('main.ts: game/index.html missing');
+}
+
+writeFileSync(join(outDir, 'dossier.json'), dossier);
+console.log(`Porto Verde dossier written: ${join(outDir, 'dossier.json')} (${dossier.length} bytes)`);

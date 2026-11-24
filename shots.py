@@ -1,73 +1,116 @@
-"""Take Porto Verde's four screenshots with headless Chromium.
+#!/usr/bin/env python3
+"""shots.py — capture Porto Verde's 4 screenshots with headless Chromium.
 
-Serves game/ on localhost:8080 (the dev server must already be running),
-opens each ?shot=<name>&seed=7 scene, waits for the render, and saves a
-1280x720 JPEG (quality 80) into screenshots/. Prints size + dimensions
-for every file so the gate limits are checked at a glance.
-
-Round 2: waits for the dev server to answer before shooting (instead of
-failing on a cold start), and accepts --out-dir so a comparison run can
-write to a scratch directory without touching screenshots/.
+Serves game/ on a local port, loads index.html?shot=<kind> for each scene,
+waits for the game to settle, screenshots 1280x720, and converts to JPEG
+at <= 256 KiB each via PIL. No network beyond localhost.
 """
-import argparse
+import http.server
+import functools
+import io
+import os
+import socketserver
 import subprocess
 import sys
+import threading
 import time
-import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-SHOTS = ["action", "drive", "mission", "chase"]
-CHROME = Path.home() / ".cache/ms-playwright/chromium-1255/chrome-linux64/chrome"
+GAME_DIR = ROOT / "game"
+SHOTS_DIR = ROOT / "screenshots"
+PORT = 8123
+WIDTH, HEIGHT = 1280, 720
+MAX_BYTES = 256 * 1024
+
+CHROME = (
+    Path.home()
+    / ".cache/ms-playwright/chromium_headless_shell-1255/chrome-headless-shell-linux64/chrome-headless-shell"
+)
+
+SCENES = [
+    ("action", "1-action.jpg"),
+    ("drive", "2-drive.jpg"),
+    ("mission", "3-mission.jpg"),
+    ("chase", "4-chase.jpg"),
+]
 
 
-def wait_for_server(url, timeout=30):
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        try:
-            urllib.request.urlopen(url, timeout=2)
-            return True
-        except Exception:
-            time.sleep(1)
-    print(f"dev server did not answer at {url} within {timeout}s — start it with: node serve.ts")
-    return False
+def serve():
+    handler = functools.partial(
+        http.server.SimpleHTTPRequestHandler, directory=str(GAME_DIR)
+    )
+    httpd = socketserver.TCPServer(("127.0.0.1", PORT), handler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    return httpd
 
 
-def take(name, out_dir):
-    png = Path(f"/tmp/pv-{name}.png")
+def shoot(kind, out_png):
+    url = f"http://127.0.0.1:{PORT}/index.html?shot={kind}"
     cmd = [
-        str(CHROME), "--headless=new", "--no-sandbox", "--disable-dev-shm-usage",
-        "--enable-unsafe-swiftshader", "--window-size=1280,720",
-        f"--screenshot={png}",
-        f"http://localhost:8080/?shot={name}&seed=7",
+        str(CHROME),
+        "--headless",
+        "--disable-gpu",
+        "--no-sandbox",
+        "--hide-scrollbars",
+        "--force-device-scale-factor=1",
+        f"--window-size={WIDTH},{HEIGHT}",
+        "--virtual-time-budget=6000",
+        f"--screenshot={out_png}",
+        url,
     ]
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
-    if not png.exists():
-        print(f"{name}: CHROME FAILED rc={r.returncode}\n{r.stdout[-500:]}\n{r.stderr[-500:]}")
-        return False
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    if result.returncode != 0:
+        print(f"[{kind}] chromium failed: {result.stderr[-500:]}", file=sys.stderr)
+        raise SystemExit(1)
+
+
+def to_jpeg(png_path, jpg_path):
     from PIL import Image
-    im = Image.open(png).convert("RGB")
-    out = out_dir / f"{['1-action', '2-drive', '3-mission', '4-chase'][SHOTS.index(name)]}.jpg"
-    im.save(out, "JPEG", quality=80)
-    print(f"{name}: {out.name} {im.size} {out.stat().st_size} bytes")
-    return out.stat().st_size <= 262144
+
+    img = Image.open(png_path).convert("RGB")
+    if img.size != (WIDTH, HEIGHT):
+        img = img.resize((WIDTH, HEIGHT))
+    quality = 88
+    while quality >= 40:
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=quality, optimize=True)
+        if len(buf.getvalue()) <= MAX_BYTES:
+            jpg_path.write_bytes(buf.getvalue())
+            return len(buf.getvalue()), quality
+        quality -= 8
+    # Last resort: shrink dimensions.
+    small = img.resize((960, 540))
+    buf = io.BytesIO()
+    small.save(buf, format="JPEG", quality=75, optimize=True)
+    jpg_path.write_bytes(buf.getvalue())
+    return len(buf.getvalue()), 75
 
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--out-dir", default=str(ROOT / "screenshots"),
-                    help="directory for the JPEGs (default: screenshots/)")
-    args = ap.parse_args()
-    out_dir = Path(args.out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    if not wait_for_server("http://localhost:8080/"):
-        return 1
-    ok = True
-    for name in SHOTS:
-        ok = take(name, out_dir) and ok
-    print("ALL OK" if ok else "SOME SHOTS FAILED / TOO BIG")
-    return 0 if ok else 1
+    SHOTS_DIR.mkdir(parents=True, exist_ok=True)
+    if not CHROME.exists():
+        print(f"chrome-headless-shell not found at {CHROME}", file=sys.stderr)
+        raise SystemExit(1)
+    httpd = serve()
+    try:
+        time.sleep(0.5)
+        for kind, name in SCENES:
+            png = SHOTS_DIR / (name.replace(".jpg", ".png"))
+            jpg = SHOTS_DIR / name
+            print(f"[{kind}] capturing -> {name} ...")
+            shoot(kind, str(png))
+            size, q = to_jpeg(png, jpg)
+            png.unlink(missing_ok=True)
+            print(f"[{kind}] {name}: {size} bytes (quality {q})")
+            if size > MAX_BYTES:
+                print(f"[{kind}] ERROR: over 256 KiB", file=sys.stderr)
+                raise SystemExit(1)
+        print("All 4 screenshots done.")
+    finally:
+        httpd.shutdown()
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

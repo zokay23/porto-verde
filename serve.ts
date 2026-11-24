@@ -1,50 +1,46 @@
-// Dev server for Porto Verde: serves game/ statically on http://localhost:8080
-// (or $PORT). No build step — the game runs straight from the files.
-import { createReadStream } from 'node:fs';
-import { readFile, stat } from 'node:fs/promises';
-import http from 'node:http';
-import path from 'node:path';
+// serve.ts — serves game/ on http://localhost:8080 so you can play
+// Porto Verde in a desktop browser. Node standard library only.
+
+import { createServer } from 'node:http';
+import { readFileSync, existsSync } from 'node:fs';
+import { join, extname, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const root = path.dirname(fileURLToPath(import.meta.url));
-const gameDir = path.join(root, 'game');
-const port = Number(process.env.PORT || 8080);
+const root = join(dirname(fileURLToPath(import.meta.url)), 'game');
+const PORT = Number(process.env.PORT || 8080);
 
-const MIME = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.mjs': 'text/javascript; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
+const MIME: Record<string, string> = {
+  '.html': 'text/html',
+  '.js': 'text/javascript',
+  '.mjs': 'text/javascript',
+  '.css': 'text/css',
+  '.json': 'application/json',
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
 };
 
-const server = http.createServer(async (req, res) => {
-  try {
-    const url = new URL(req.url || '/', `http://localhost:${port}`);
-    let rel = decodeURIComponent(url.pathname);
-    if (rel === '/') rel = '/index.html';
-    const full = path.join(gameDir, rel);
-    if (!full.startsWith(gameDir)) {
-      res.writeHead(403);
-      res.end('forbidden');
-      return;
-    }
-    const st = await stat(full);
-    if (!st.isFile()) {
-      res.writeHead(404);
-      res.end('not found');
-      return;
-    }
-    res.writeHead(200, { 'content-type': MIME[path.extname(full)] || 'application/octet-stream' });
-    createReadStream(full).pipe(res);
-  } catch {
-    res.writeHead(404);
+const server = createServer((req, res) => {
+  const urlPath = decodeURIComponent((req.url || '/').split('?')[0]);
+  const rel = urlPath === '/' ? 'index.html' : urlPath.replace(/^\//, '');
+  const file = join(root, rel);
+  if (!file.startsWith(root) || !existsSync(file)) {
+    res.writeHead(404, { 'content-type': 'text/plain' });
     res.end('not found');
+    return;
+  }
+  try {
+    const body = readFileSync(file);
+    res.writeHead(200, {
+      'content-type': MIME[extname(file)] || 'application/octet-stream',
+      'cache-control': 'no-store',
+    });
+    res.end(body);
+  } catch {
+    res.writeHead(500, { 'content-type': 'text/plain' });
+    res.end('read error');
   }
 });
 
-server.listen(port, () => {
-  console.log(`Porto Verde at http://localhost:${port}`);
+server.listen(PORT, () => {
+  console.log(`Porto Verde at http://localhost:${PORT}`);
 });

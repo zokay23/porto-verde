@@ -1,451 +1,574 @@
-// Simulation: the whole game state and its rules, no rendering here.
-// Player on foot or in a car, traffic, pedestrians, Verde PD, wanted
-// level, combat and the five-mission story. Render reads this state.
-//
-// Round 2 fixes (gameplay only, no visual change):
-// - shoot() used to hit a *copy* of each foot officer, so officer damage
-//   never stuck and officers could not be shot down. It now targets the
-//   live officer objects, like punch() already did.
-// - Police spawn ids used sim.time (seconds), so two officers spawned in
-//   the same second shared an id. A monotonic counter makes them unique.
-// - Mission 5 rams now have a 1s cooldown, so one long scrape cannot
-//   count twice in consecutive frames.
-import { CONFIG, CAR_DEFS, MISSIONS } from './config.js';
-import { hitsCollider, clampToWorld, ROAD_AXES } from './city.js';
+// sim.js — Porto Verde simulation: player, cars, traffic, pedestrians,
+// Verde PD wanted system, combat, busted, and the 5-mission chain.
+// Pure logic: no DOM, no canvas, no AudioContext. The browser wires input
+// and rendering around it; the playtest drives it directly in Node.
 
-export function makeCar(id, def, x, z, angle) {
-  return { id, def, x, z, angle, speed: 0, color: def.color, police: !!def.police,
-    traffic: false, rival: false, health: 100, flash: 0 };
+import { RNG, clamp, dist2, angleTo } from './random.js';
+import { CONFIG, MISSIONS } from './config.js';
+import { buildCity, roadCenter, PITCH } from './city.js';
+
+export function wantedStars(heat) {
+  if (heat < 20) return 0;
+  if (heat < 45) return 1;
+  if (heat < 80) return 2;
+  if (heat < 130) return 3;
+  if (heat < 190) return 4;
+  return 5;
 }
 
-export function createSim(city, rng) {
-  const sim = {
-    city, rng, time: 0, paused: false, started: false, over: false,
-    player: { x: -118, z: -100, y: 0, vy: 0, angle: 0, health: CONFIG.playerHealth,
-      ammo: CONFIG.magSize, cash: 40, wanted: 0, inCar: null, busted: 0,
-      heatTimer: 0, crimeTimer: 0 },
-    cars: [], peds: [], policeFoot: [], rivals: [], rivalCar: null,
-    missionIndex: 0, mission: null, missionTimer: 0, missionHits: 0,
-    messages: [], effects: [], shotsFired: 0,
-    // Round 2: unique police ids + ram cooldown bookkeeping.
-    _policeSeq: 0, _ramAt: -99,
+export function createGame(seed = CONFIG.CITY_SEED) {
+  const city = buildCity(seed);
+  const rng = new RNG(seed * 101 + 13);
+
+  const state = {
+    city,
+    time: 0,
+    status: 'title', // title | playing | paused | busted | won
+    player: {
+      x: city.spawn.x,
+      y: city.spawn.y,
+      angle: -Math.PI / 2,
+      hp: CONFIG.PLAYER_HP,
+      cash: CONFIG.START_CASH,
+      ammo: CONFIG.MAG_SIZE,
+      reserve: 48,
+      inCar: null,
+      jumping: 0,
+      punchCooldown: 0,
+      reloadTimer: 0,
+      speed: 0,
+    },
+    cars: [],
+    peds: [],
+    cops: [],
+    bullets: [],
+    enemies: [],
+    pickups: [],
+    heat: 0,
+    wanted: 0,
+    missionIndex: 0,
+    mission: null,
+    missionTimer: 0,
+    missionFlash: '',
+    message: '',
+    messageTimer: 0,
+    stats: { shots: 0, hits: 0, carsJacked: 0, pedsHit: 0, missionsDone: 0 },
+    copSpawnTimer: 0,
+    bustedTimer: 0,
   };
-  // Parked cars the player can steal, near the garage and the plaza.
-  const parked = [
-    [0, -112, -104, 0.4], [1, -104, -132, -1.2], [2, -30, 8, 1.57],
-    [3, 12, -38, 0], [4, 88, -104, 3.1], [0, 52, 118, -0.8],
-  ];
-  parked.forEach(([di, x, z, a], i) => sim.cars.push(makeCar(`park${i}`, CAR_DEFS[di], x, z, a)));
-  spawnTraffic(sim, 10);
-  spawnPeds(sim, 16);
-  startMission(sim, 0);
-  return sim;
-}
 
-export function spawnTraffic(sim, n) {
-  for (let i = 0; i < n; i++) {
-    const def = sim.rng.pick(CAR_DEFS.slice(0, 5));
-    const axis = sim.rng.pick(['x', 'z']);
-    const line = sim.rng.pick(ROAD_AXES);
-    const along = sim.rng.range(-150, 150);
-    const c = makeCar(`traffic${i}`, def, axis === 'x' ? along : line, axis === 'x' ? line : along,
-      axis === 'x' ? (sim.rng.chance(0.5) ? 0 : Math.PI) : (sim.rng.chance(0.5) ? Math.PI / 2 : -Math.PI / 2));
-    c.traffic = true; c.axis = axis; c.dir = sim.rng.chance(0.5) ? 1 : -1;
-    c.speed = CONFIG.trafficSpeed * sim.rng.range(0.7, 1.1);
-    sim.cars.push(c);
+  // Traffic cars on the roads.
+  for (let i = 0; i < CONFIG.TRAFFIC_CARS; i++) {
+    const p = city.randomRoadPoint(rng);
+    // Traffic on a vertical road runs north/south; on a horizontal one east/west.
+    const onVertical = Math.abs(p.x % PITCH - CONFIG.ROAD_PX / 2) < 4;
+    state.cars.push({
+      id: 'car-' + i,
+      x: p.x,
+      y: p.y,
+      angle: onVertical ? (rng.chance(0.5) ? Math.PI / 2 : -Math.PI / 2) : (rng.chance(0.5) ? 0 : Math.PI),
+      speed: rng.range(90, 150),
+      color: rng.pick(city.carPalette),
+      driver: 'traffic',
+      parked: rng.chance(0.25),
+    });
   }
-}
 
-export function spawnPeds(sim, n) {
-  const colors = [0xe8b8a0, 0x8ab8d8, 0xd8d8d8, 0xb8a8e8, 0xe8d88a, 0x7ac8a0];
-  for (let i = 0; i < n; i++) {
-    sim.peds.push({ id: `ped${i}`, x: sim.rng.range(-150, 150), z: sim.rng.range(-150, 150),
-      angle: sim.rng.range(0, Math.PI * 2), speed: sim.rng.range(1.2, 2.4),
-      color: sim.rng.pick(colors), tx: 0, tz: 0, pause: 0 });
+  // Pedestrians on sidewalks (near road edges).
+  for (let i = 0; i < CONFIG.PEDS; i++) {
+    const p = city.randomRoadPoint(rng);
+    state.peds.push({
+      id: 'ped-' + i,
+      x: p.x + rng.range(-30, 30),
+      y: p.y + rng.range(-30, 30),
+      angle: rng.range(0, Math.PI * 2),
+      speed: rng.range(35, 70),
+      color: rng.pick(['#d8d8d8', '#e74c3c', '#3498db', '#f1c40f', '#1abc9c']),
+      walking: true,
+    });
   }
+
+  startMission(state, 0);
+  return state;
 }
 
-export function say(sim, text) {
-  sim.messages.unshift({ text, t: sim.time });
-  if (sim.messages.length > 5) sim.messages.pop();
-}
+export function startMission(state, index) {
+  const def = MISSIONS[index];
+  state.missionIndex = index;
+  state.mission = {
+    id: def.id,
+    name: def.name,
+    brief: def.brief,
+    reward: def.reward,
+    stage: 0,
+    done: false,
+  };
+  state.missionTimer = 0;
+  state.enemies = [];
+  state.pickups = [];
+  const c = state.city;
 
-export function addWanted(sim, n) {
-  const p = sim.player;
-  p.wanted = Math.min(CONFIG.maxWanted, p.wanted + n);
-  p.crimeTimer = 0;
-  if (n > 0) say(sim, `Wanted level ${p.wanted} — Verde PD is on you!`);
-}
-
-// Reload the mag. No-op (and silent) when the mag is already full.
-export function reload(sim, audio) {
-  const p = sim.player;
-  if (p.ammo >= CONFIG.magSize) return false;
-  p.ammo = CONFIG.magSize;
-  if (audio) audio.pickup();
-  return true;
-}
-
-export function startMission(sim, idx) {
-  sim.missionIndex = idx;
-  const m = MISSIONS[idx];
-  sim.mission = m;
-  sim.missionTimer = idx === 1 ? CONFIG.mission2Seconds : 0;
-  sim.missionHits = 0;
-  sim.rivals = [];
-  if (sim.rivalCar) { sim.rivalCar.rival = false; sim.rivalCar = null; }
-  if (idx === 2) { sim.player.wanted = 2; say(sim, 'Heat Check: you are at 2 stars. Lose them!'); }
-  if (idx === 3) {
-    for (let i = 0; i < 3; i++) {
-      sim.rivals.push({ id: `rival${i}`, x: -8 + i * 8, z: -6 + (i % 2) * 12,
-        angle: 0, health: CONFIG.rivalHealth, alive: true });
+  if (def.id === 'the-package') {
+    state.pickups.push({ id: 'package', kind: 'package', x: c.packageSpot.x, y: c.packageSpot.y, taken: false });
+  }
+  if (def.id === 'rooftop-rumble') {
+    const r = c.rooftop;
+    for (let i = 0; i < 4; i++) {
+      state.enemies.push({
+        id: 'crew-' + i,
+        x: r.x + 40 + (i % 2) * 140,
+        y: r.y + 40 + Math.floor(i / 2) * 140,
+        angle: 0,
+        hp: 60,
+        shootTimer: 1 + i * 0.4,
+        alive: true,
+      });
     }
-    say(sim, 'Rooftop Rumble: 3 rivals at Verde Plaza!');
   }
-  if (idx === 4) {
-    const c = makeCar('rivalcoupe', CAR_DEFS[1], 60, 60, 0.8);
-    c.rival = true; c.traffic = true; c.axis = 'x'; c.dir = 1; c.speed = 16;
-    sim.cars.push(c); sim.rivalCar = c;
-    say(sim, 'The Marlin\'s Due: ram the blue coupe 3 times!');
-  }
-  say(sim, `${m.title} — ${m.brief}`);
+  flash(state, def.name + ' — ' + def.brief);
 }
 
-export function completeMission(sim) {
-  const m = sim.mission;
-  sim.player.cash += m.reward;
-  say(sim, `Mission complete: ${m.title}  +$${m.reward}`);
-  if (sim.missionIndex + 1 < MISSIONS.length) {
-    startMission(sim, sim.missionIndex + 1);
-  } else {
-    sim.over = true;
-    say(sim, 'All five jobs done. Porto Verde is yours, Dante.');
-  }
+export function flash(state, text, dur = 4) {
+  state.message = text;
+  state.messageTimer = dur;
 }
 
-export function missionTarget(sim) {
-  const g = sim.city.landmarks.garage, m = sim.city.landmarks.marlin, p = sim.city.landmarks.plaza;
-  switch (sim.missionIndex) {
-    case 0: return sim.player.inCar ? { x: g.x, z: g.z, label: 'Garage' } : { x: -112, z: -104, label: 'Steal a car' };
-    case 1: return { x: m.x, z: m.z, label: 'Marlin Club' };
-    case 2: return { x: p.x, z: p.z, label: 'Lay low' };
-    case 3: return { x: p.x, z: p.z, label: 'Plaza rivals' };
-    case 4: return sim.missionHits >= 3 ? { x: g.x, z: g.z, label: 'Garage' }
-      : (sim.rivalCar ? { x: sim.rivalCar.x, z: sim.rivalCar.z, label: 'Rival coupe' } : { x: p.x, z: p.z, label: 'Rival coupe' });
-    default: return { x: g.x, z: g.z, label: 'Garage' };
+export function missionTarget(state) {
+  const c = state.city;
+  const m = state.mission;
+  if (!m) return null;
+  switch (m.id) {
+    case 'wheels-up':
+      return m.stage === 0 ? null : { x: c.deliverySpot.x, y: c.deliverySpot.y, label: 'Drive here' };
+    case 'the-package':
+      if (m.stage === 0) return { x: c.packageSpot.x, y: c.packageSpot.y, label: 'Pick up the package' };
+      return { x: c.deliverySpot.x, y: c.deliverySpot.y, label: 'Deliver it!' };
+    case 'heat-check':
+      return null;
+    case 'rooftop-rumble':
+      return { x: c.rooftop.x + c.rooftop.w / 2, y: c.rooftop.y + c.rooftop.h / 2, label: 'Rooftop' };
+    case 'marlins-due':
+      return { x: c.marina.x + 210, y: c.marina.y + 60, label: 'The Marina' };
+    default:
+      return null;
   }
 }
 
-function dist2(ax, az, bx, bz) { return Math.hypot(ax - bx, az - bz); }
+export function addHeat(state, amount) {
+  state.heat = clamp(state.heat + amount, 0, 220);
+  state.wanted = wantedStars(state.heat);
+}
 
-export function nearestCar(sim, maxD) {
-  let best = null, bd = maxD;
-  for (const c of sim.cars) {
-    if (c.police) continue;
-    const d = dist2(sim.player.x, sim.player.z, c.x, c.z);
-    if (d < bd) { bd = d; best = c; }
+export function completeMission(state) {
+  const m = state.mission;
+  if (!m || m.done) return;
+  m.done = true;
+  state.player.cash += m.reward;
+  state.stats.missionsDone++;
+  flash(state, m.name + ' complete! +$' + m.reward, 4);
+  if (state.missionIndex + 1 >= MISSIONS.length) {
+    state.status = 'won';
+    return;
+  }
+  startMission(state, state.missionIndex + 1);
+}
+
+export function getBusted(state) {
+  const loss = Math.floor(state.player.cash * CONFIG.BUSTED_CASH_LOSS);
+  state.player.cash -= loss;
+  state.player.hp = CONFIG.PLAYER_HP;
+  state.heat = 0;
+  state.wanted = 0;
+  state.cops = [];
+  state.bullets = [];
+  const h = state.city.hospital;
+  state.player.x = h.x + h.w / 2;
+  state.player.y = h.y + h.h + 40;
+  state.player.inCar = null;
+  state.status = 'busted';
+  state.bustedTimer = 3;
+  flash(state, 'BUSTED! Verde PD took $' + loss + ' (-10%).', 3);
+  return loss;
+}
+
+function nearestCar(state, x, y, maxDist) {
+  let best = null;
+  let bestD = maxDist * maxDist;
+  for (const car of state.cars) {
+    const d = dist2(x, y, car.x, car.y);
+    if (d < bestD) {
+      bestD = d;
+      best = car;
+    }
   }
   return best;
 }
 
-export function enterCar(sim, audio) {
-  const c = nearestCar(sim, 4.5);
-  if (!c) { say(sim, 'No car close enough — walk to a parked car.'); return false; }
-  sim.player.inCar = c; c.speed = 0;
-  if (c.traffic) { c.traffic = false; addWanted(sim, 1); say(sim, `Carjacked a ${c.def.name}!`); }
-  else say(sim, `In the ${c.def.name}. Drive!`);
-  if (audio) audio.pickup();
+export function tryEnterCar(state) {
+  const p = state.player;
+  if (p.inCar) {
+    const car = state.cars.find((c) => c.id === p.inCar);
+    if (car) {
+      p.x = car.x + 30;
+      p.y = car.y + 30;
+      car.driver = 'none';
+    }
+    p.inCar = null;
+    return 'exit';
+  }
+  const car = nearestCar(state, p.x, p.y, 56);
+  if (!car) return null;
+  if (car.driver === 'traffic') {
+    addHeat(state, CONFIG.HEAT_PER_CARJACK);
+    state.stats.carsJacked++;
+    flash(state, 'Car jacked! Verde PD noticed.', 2.5);
+  }
+  car.driver = 'player';
+  p.inCar = car.id;
+  return 'enter';
+}
+
+export function shoot(state) {
+  const p = state.player;
+  if (p.reloadTimer > 0 || p.ammo <= 0) return false;
+  p.ammo--;
+  state.stats.shots++;
+  const a = p.angle;
+  state.bullets.push({
+    x: p.x + Math.cos(a) * 20,
+    y: p.y + Math.sin(a) * 20,
+    vx: Math.cos(a) * CONFIG.BULLET_SPEED,
+    vy: Math.sin(a) * CONFIG.BULLET_SPEED,
+    life: 1.2,
+    from: 'player',
+  });
+  addHeat(state, CONFIG.HEAT_PER_SHOT);
   return true;
 }
 
-export function exitCar(sim) {
-  const c = sim.player.inCar;
-  if (!c) return;
-  sim.player.x = c.x + Math.cos(c.angle + Math.PI / 2) * 2.5;
-  sim.player.z = c.z + Math.sin(c.angle + Math.PI / 2) * 2.5;
-  sim.player.angle = c.angle;
-  sim.player.inCar = null;
-}
-
-export function shoot(sim, audio) {
-  const p = sim.player;
-  if (p.ammo <= 0) { say(sim, 'Mag empty — press R to reload.'); return; }
-  p.ammo--; sim.shotsFired++;
-  if (audio) audio.shoot();
-  // Targets are the LIVE rival / officer objects: damage must stick.
-  // (Round 1 spread-copied officers here, so their health never dropped.)
-  const targets = [...sim.rivals.filter(r => r.alive),
-    ...sim.policeFoot.map(o => { o.police = true; return o; })];
-  let best = null, bd = CONFIG.shootRange;
-  for (const t of targets) {
-    const d = dist2(p.x, p.z, t.x, t.z);
-    if (d < bd) { bd = d; best = t; }
-  }
-  sim.effects.push({ kind: 'shot', x: p.x, z: p.z, angle: p.angle, t: sim.time });
-  if (best) {
-    best.health -= CONFIG.shootDamage;
-    addWanted(sim, best.police ? 1 : 0);
-    if (best.health <= 0) {
-      if (best.id && best.id.startsWith('rival')) { best.alive = false; say(sim, 'Rival down!'); }
-      else { sim.policeFoot = sim.policeFoot.filter(o => o.id !== best.id); say(sim, 'Officer down!'); }
+export function punch(state) {
+  const p = state.player;
+  if (p.punchCooldown > 0) return false;
+  p.punchCooldown = CONFIG.PUNCH_COOLDOWN;
+  const reach = CONFIG.PUNCH_RANGE;
+  const px = p.x + Math.cos(p.angle) * reach;
+  const py = p.y + Math.sin(p.angle) * reach;
+  for (const ped of state.peds) {
+    if (dist2(px, py, ped.x, ped.y) < 26 * 26) {
+      ped.walking = false;
+      ped.flee = 2;
+      addHeat(state, CONFIG.HEAT_PER_PED_HIT);
+      state.stats.pedsHit++;
+      flash(state, 'You hit a pedestrian! Verde PD noticed.', 2);
+      return true;
     }
   }
-}
-
-export function punch(sim, audio) {
-  const p = sim.player;
-  if (audio) audio.punch();
-  const targets = [...sim.rivals.filter(r => r.alive), ...sim.policeFoot];
-  let best = null, bd = CONFIG.punchRange;
-  for (const t of targets) {
-    const d = dist2(p.x, p.z, t.x, t.z);
-    if (d < bd) { bd = d; best = t; }
-  }
-  if (best) {
-    best.health -= CONFIG.punchDamage;
-    if (best.health <= 0 && best.id && best.id.startsWith('rival')) { best.alive = false; say(sim, 'Rival down!'); }
-    if (best.health <= 0 && !best.id?.startsWith('rival')) {
-      sim.policeFoot = sim.policeFoot.filter(o => o.id !== best.id);
-      addWanted(sim, 1);
+  for (const e of state.enemies) {
+    if (e.alive && dist2(px, py, e.x, e.y) < 30 * 30) {
+      e.hp -= CONFIG.PUNCH_DAMAGE;
+      if (e.hp <= 0) e.alive = false;
+      return true;
     }
   }
+  return false;
 }
 
-function moveWithCollisions(sim, obj, dx, dz, radius) {
-  const nx = obj.x + dx, nz = obj.z + dz;
-  if (!hitsCollider(sim.city.colliders, nx, obj.z, radius)) obj.x = nx;
-  if (!hitsCollider(sim.city.colliders, obj.x, nz, radius)) obj.z = nz;
-  const c = clampToWorld(obj.x, obj.z); obj.x = c.x; obj.z = c.z;
+export function reload(state) {
+  const p = state.player;
+  if (p.reloadTimer > 0 || p.ammo >= CONFIG.MAG_SIZE || p.reserve <= 0) return false;
+  p.reloadTimer = CONFIG.RELOAD_TIME;
+  return true;
 }
 
-function updateFoot(sim, input, dt) {
-  const p = sim.player;
-  const run = input.run ? CONFIG.runSpeed : CONFIG.walkSpeed;
-  const fx = Math.sin(input.camYaw), fz = Math.cos(input.camYaw);
-  const rx = Math.cos(input.camYaw), rz = -Math.sin(input.camYaw);
-  let mx = 0, mz = 0;
-  if (input.forward) { mx += fx; mz += fz; }
-  if (input.back) { mx -= fx; mz -= fz; }
-  if (input.right) { mx += rx; mz += rz; }
-  if (input.left) { mx -= rx; mz -= rz; }
-  const len = Math.hypot(mx, mz);
-  if (len > 0) {
-    mx /= len; mz /= len;
-    moveWithCollisions(sim, p, mx * run * dt, mz * run * dt, 0.7);
-    p.angle = Math.atan2(mx, mz);
-  }
-  if (input.jump && p.y <= 0.01) p.vy = CONFIG.jumpSpeed;
-  p.vy -= CONFIG.gravity * dt; p.y += p.vy * dt;
-  if (p.y < 0) { p.y = 0; p.vy = 0; }
+function moveWithCollision(state, ent, dx, dy, radius) {
+  const nx = ent.x + dx;
+  const ny = ent.y + dy;
+  if (!state.city.pointInBuilding(nx, ent.y)) ent.x = nx;
+  if (!state.city.pointInBuilding(ent.x, ny)) ent.y = ny;
+  const c = state.city.clampToCity(ent.x, ent.y, radius);
+  ent.x = c.x;
+  ent.y = c.y;
 }
 
-function updateDrive(sim, input, dt, audio) {
-  const p = sim.player, c = p.inCar;
-  if (!c) return;
-  const steer = (input.left ? 1 : 0) - (input.right ? 1 : 0);
-  if (input.forward) c.speed += CONFIG.carAccel * dt;
-  if (input.back) c.speed -= (c.speed > 0.5 ? CONFIG.carBrake : CONFIG.carAccel * 0.6) * dt;
-  c.speed -= c.speed * CONFIG.carDrag * dt;
-  c.speed = Math.max(-CONFIG.carMaxReverse, Math.min(CONFIG.carMaxSpeed * c.def.speed, c.speed));
-  c.angle += steer * CONFIG.carTurn * dt * (c.speed / 12) * (c.speed >= 0 ? 1 : -1);
-  const nx = c.x + Math.sin(c.angle) * c.speed * dt;
-  const nz = c.z + Math.cos(c.angle) * c.speed * dt;
-  const hit = hitsCollider(sim.city.colliders, nx, nz, 1.6);
-  if (hit) {
-    if (Math.abs(c.speed) > 9 && audio) audio.crash();
-    c.speed *= -0.25;
-  } else { c.x = nx; c.z = nz; }
-  const cc = clampToWorld(c.x, c.z); c.x = cc.x; c.z = cc.z;
-  p.x = c.x; p.z = c.z; p.angle = c.angle;
-  // Ram the rival coupe in mission 5 — one counted hit per cooldown.
-  if (sim.missionIndex === 4 && sim.rivalCar && sim.missionHits < 3) {
-    if (dist2(c.x, c.z, sim.rivalCar.x, sim.rivalCar.z) < 4.5 && Math.abs(c.speed) > 7
-      && sim.time - sim._ramAt >= CONFIG.ramCooldownSeconds) {
-      sim._ramAt = sim.time;
-      sim.missionHits++;
-      sim.rivalCar.health -= 40;
-      say(sim, `Ram ${sim.missionHits}/3 — the coupe is hurting!`);
-      if (audio) audio.crash();
-      c.speed *= 0.4;
-    }
-  }
-  if (audio) audio.setEngine(Math.abs(c.speed) / CONFIG.carMaxSpeed, true);
-}
+export function update(state, input, dt) {
+  if (state.status !== 'playing') return;
+  dt = Math.min(dt, 0.05);
+  state.time += dt;
+  const p = state.player;
+  const city = state.city;
 
-function updateTraffic(sim, dt) {
-  for (const c of sim.cars) {
-    if (!c.traffic) continue;
-    const speed = c.rival ? 16 : c.speed;
-    c.x += Math.sin(c.angle) * speed * dt;
-    c.z += Math.cos(c.angle) * speed * dt;
-    // At an intersection, sometimes turn onto the cross street.
-    const nearX = ROAD_AXES.some(a => Math.abs(c.x - a) < 1.2);
-    const nearZ = ROAD_AXES.some(a => Math.abs(c.z - a) < 1.2);
-    if ((nearX || nearZ) && sim.rng.chance(0.004)) {
-      c.angle += sim.rng.pick([-Math.PI / 2, Math.PI / 2]);
-      c.axis = c.axis === 'x' ? 'z' : 'x';
+  if (state.messageTimer > 0) state.messageTimer -= dt;
+  if (p.punchCooldown > 0) p.punchCooldown -= dt;
+  if (p.reloadTimer > 0) {
+    p.reloadTimer -= dt;
+    if (p.reloadTimer <= 0) {
+      const need = CONFIG.MAG_SIZE - p.ammo;
+      const take = Math.min(need, p.reserve);
+      p.ammo += take;
+      p.reserve -= take;
     }
-    if (Math.abs(c.x) > 165 || Math.abs(c.z) > 165) {
-      c.x = sim.rng.range(-140, 140); c.z = sim.rng.pick(ROAD_AXES);
-      c.angle = sim.rng.pick([0, Math.PI / 2, Math.PI, -Math.PI / 2]);
-    }
-    if (hitsCollider(sim.city.colliders, c.x, c.z, 1.4)) { c.angle += Math.PI / 2; }
   }
-}
+  if (p.jumping > 0) p.jumping -= dt;
 
-function updatePeds(sim, dt) {
-  for (const ped of sim.peds) {
-    if (ped.pause > 0) { ped.pause -= dt; continue; }
-    const d = dist2(ped.x, ped.z, ped.tx, ped.tz);
-    if (d < 2 || (ped.tx === 0 && ped.tz === 0)) {
-      ped.tx = sim.rng.range(-150, 150); ped.tz = sim.rng.range(-150, 150);
-      if (sim.rng.chance(0.2)) ped.pause = sim.rng.range(1, 4);
-    }
-    const a = Math.atan2(ped.tx - ped.x, ped.tz - ped.z);
-    ped.angle = a;
-    ped.x += Math.sin(a) * ped.speed * dt;
-    ped.z += Math.cos(a) * ped.speed * dt;
-    // Peds scatter from a speeding player car.
-    const p = sim.player;
-    if (p.inCar && dist2(ped.x, ped.z, p.x, p.z) < 6) {
-      ped.x += (ped.x - p.x) * dt * 2; ped.z += (ped.z - p.z) * dt * 2;
-    }
+  // Heat decays when the player keeps a low profile.
+  if (state.wanted > 0) {
+    state.heat = Math.max(0, state.heat - CONFIG.HEAT_DECAY_PER_SEC * dt);
+    state.wanted = wantedStars(state.heat);
   }
-}
 
-function updatePolice(sim, dt, audio) {
-  const p = sim.player;
-  const wantCars = p.wanted >= 2 ? Math.min(3, p.wanted - 1) : 0;
-  const wantFoot = p.wanted >= 1 ? Math.min(3, p.wanted) : 0;
-  // Spawn police cars (ids from a counter, never from the clock).
-  const cars = sim.cars.filter(c => c.police);
-  while (cars.length < wantCars) {
-    const c = makeCar(`pd${sim._policeSeq++}`, CAR_DEFS[5],
-      p.x + sim.rng.range(35, 55) * (sim.rng.chance(0.5) ? 1 : -1),
-      p.z + sim.rng.range(35, 55) * (sim.rng.chance(0.5) ? 1 : -1), 0);
-    c.police = true; sim.cars.push(c); cars.push(c);
-  }
-  while (sim.policeFoot.length < wantFoot) {
-    sim.policeFoot.push({ id: `officer${sim._policeSeq++}`,
-      x: p.x + sim.rng.range(18, 28) * (sim.rng.chance(0.5) ? 1 : -1),
-      z: p.z + sim.rng.range(18, 28) * (sim.rng.chance(0.5) ? 1 : -1),
-      angle: 0, health: 60 });
-  }
-  // Police cars chase and ram; foot officers run at the player.
-  for (const c of cars) {
-    const a = Math.atan2(p.x - c.x, p.z - c.z);
-    let da = a - c.angle;
-    while (da > Math.PI) da -= Math.PI * 2; while (da < -Math.PI) da += Math.PI * 2;
-    c.angle += Math.max(-2.4 * dt, Math.min(2.4 * dt, da));
-    c.speed = CONFIG.policeCarSpeed;
-    c.x += Math.sin(c.angle) * c.speed * dt;
-    c.z += Math.cos(c.angle) * c.speed * dt;
-    c.flash = (sim.time * 4) % 1 < 0.5 ? 1 : 0;
-    if (dist2(c.x, c.z, p.x, p.z) < 3.5 && p.inCar) {
-      p.inCar.speed *= 0.7;
-      if (audio) audio.crash();
+  // --- Player movement ---
+  const car = p.inCar ? state.cars.find((c) => c.id === p.inCar) : null;
+  let mx = (input.right ? 1 : 0) - (input.left ? 1 : 0);
+  let my = (input.down ? 1 : 0) - (input.up ? 1 : 0);
+  const mag = Math.hypot(mx, my) || 1;
+  mx /= mag;
+  my /= mag;
+
+  if (car) {
+    // Driving: W/S throttle, A/D steer relative to the car's heading.
+    const throttle = (input.up ? 1 : 0) - (input.down ? 0.55 : 0);
+    const steer = (input.left ? 1 : 0) - (input.right ? 1 : 0);
+    const moving = Math.abs(car.speed) > 5;
+    if (throttle !== 0) {
+      car.speed += throttle * CONFIG.CAR_ACCEL * dt;
+      car.speed = clamp(car.speed, -CONFIG.CAR_REVERSE_SPEED, CONFIG.CAR_TOP_SPEED);
+    } else {
+      car.speed *= Math.pow(0.4, dt);
+      if (Math.abs(car.speed) < 4) car.speed = 0;
     }
-  }
-  for (const o of sim.policeFoot) {
-    const d = dist2(o.x, o.z, p.x, p.z);
-    const a = Math.atan2(p.x - o.x, p.z - o.z);
-    o.angle = a;
-    o.x += Math.sin(a) * CONFIG.policeFootSpeed * dt;
-    o.z += Math.cos(a) * CONFIG.policeFootSpeed * dt;
-    if (d < 2.2 && !p.inCar) {
-      p.busted += dt;
-      if (p.busted > 1.1) {
-        const lost = Math.floor(p.cash * CONFIG.bustedCashLoss);
-        p.cash -= lost; p.wanted = 0; p.busted = 0; p.health = CONFIG.playerHealth;
-        p.x = sim.city.landmarks.garage.x; p.z = sim.city.landmarks.garage.z + 12;
-        if (p.inCar) p.inCar = null;
-        say(sim, `BUSTED! Verde PD took $${lost}. Back at the garage.`);
-        if (audio) audio.busted();
+    if (moving) car.angle += steer * CONFIG.CAR_TURN * dt * (car.speed >= 0 ? 1 : -1) * Math.min(1, Math.abs(car.speed) / 120);
+    moveWithCollision(state, car, Math.cos(car.angle) * car.speed * dt, Math.sin(car.angle) * car.speed * dt, CONFIG.CAR_RADIUS);
+    p.x = car.x;
+    p.y = car.y;
+    p.angle = car.angle;
+    p.speed = Math.abs(car.speed);
+    // Running over pedestrians in a car draws heat.
+    for (const ped of state.peds) {
+      if (ped.walking && dist2(car.x, car.y, ped.x, ped.y) < 30 * 30 && Math.abs(car.speed) > 80) {
+        ped.walking = false;
+        ped.flee = 3;
+        addHeat(state, CONFIG.HEAT_PER_PED_HIT);
+        state.stats.pedsHit++;
       }
-    } else p.busted = Math.max(0, p.busted - dt);
+    }
+  } else {
+    const speed = input.run ? CONFIG.RUN_SPEED : CONFIG.WALK_SPEED;
+    if (mx !== 0 || my !== 0) {
+      p.angle = Math.atan2(my, mx);
+      p.speed = speed;
+    } else {
+      p.speed = 0;
+    }
+    moveWithCollision(state, p, mx * speed * dt, my * speed * dt, CONFIG.PLAYER_RADIUS);
+    if (input.jump && p.jumping <= 0) p.jumping = CONFIG.JUMP_TIME;
   }
-  // Wanted decays when the player stays out of trouble and out of sight.
-  p.crimeTimer += dt;
-  if (p.wanted > 0 && p.crimeTimer > 14) {
-    p.heatTimer += dt;
-    if (p.heatTimer > 9) {
-      p.wanted--; p.heatTimer = 0; p.crimeTimer = 0;
-      say(sim, `Wanted down to ${p.wanted} star${p.wanted === 1 ? '' : 's'}.`);
+
+  // --- Traffic ---
+  for (const c of state.cars) {
+    if (c.driver !== 'traffic' || c.parked) continue;
+    c.x += Math.cos(c.angle) * c.speed * dt;
+    c.y += Math.sin(c.angle) * c.speed * dt;
+    // Turn around at the city edge, stay on roads.
+    if (c.x < 30 || c.x > city.size - 30 || c.y < 30 || c.y > city.size - 30) {
+      c.angle += Math.PI;
+    }
+    if (city.pointInBuilding(c.x, c.y)) c.angle += Math.PI / 2;
+  }
+
+  // --- Pedestrians ---
+  for (const ped of state.peds) {
+    if (!ped.walking) {
+      if (ped.flee > 0) {
+        ped.flee -= dt;
+        const a = angleTo(p.x, p.y, ped.x, ped.y);
+        ped.x += Math.cos(a) * 120 * dt;
+        ped.y += Math.sin(a) * 120 * dt;
+        if (ped.flee <= 0) ped.walking = true;
+      }
+      continue;
+    }
+    ped.x += Math.cos(ped.angle) * ped.speed * dt;
+    ped.y += Math.sin(ped.angle) * ped.speed * dt;
+    if (city.pointInBuilding(ped.x, ped.y) || ped.x < 20 || ped.y < 20 || ped.x > city.size - 20 || ped.y > city.size - 20) {
+      ped.angle += Math.PI / 2 + (Math.random() - 0.5);
     }
   }
-  // Remove police when wanted is gone.
-  if (p.wanted === 0) {
-    sim.cars = sim.cars.filter(c => !c.police);
-    sim.policeFoot = [];
-  }
-}
 
-function updateRivals(sim, dt) {
-  const p = sim.player;
-  for (const r of sim.rivals) {
-    if (!r.alive) continue;
-    const d = dist2(r.x, r.z, p.x, p.z);
-    if (d < 18) {
-      const a = Math.atan2(p.x - r.x, p.z - r.z);
-      r.angle = a;
-      r.x += Math.sin(a) * 5.5 * dt; r.z += Math.cos(a) * 5.5 * dt;
-      if (d < 2) { p.health -= 12 * dt; }
+  // --- Cops ---
+  const wantCops = Math.min(state.wanted, 5);
+  state.copSpawnTimer -= dt;
+  if (state.cops.length < wantCops && state.copSpawnTimer <= 0) {
+    state.copSpawnTimer = CONFIG.COP_SPAWN_INTERVAL / Math.max(1, wantCops);
+    const a = Math.random() * Math.PI * 2;
+    state.cops.push({
+      x: clamp(p.x + Math.cos(a) * 520, 30, city.size - 30),
+      y: clamp(p.y + Math.sin(a) * 520, 30, city.size - 30),
+      angle: 0,
+      speed: CONFIG.COP_SPEED + state.wanted * 12,
+    });
+  }
+  for (const cop of state.cops) {
+    const a = angleTo(cop.x, cop.y, p.x, p.y);
+    cop.angle = a;
+    cop.x += Math.cos(a) * cop.speed * dt;
+    cop.y += Math.sin(a) * cop.speed * dt;
+    if (dist2(cop.x, cop.y, p.x, p.y) < 30 * 30) {
+      getBusted(state);
+      return;
     }
   }
-  if (sim.missionIndex === 3 && sim.rivals.length && sim.rivals.every(r => !r.alive)) {
-    completeMission(sim);
+  if (state.wanted === 0 && state.cops.length > 0) {
+    state.cops = state.cops.filter((c) => dist2(c.x, c.y, p.x, p.y) < 500 * 500);
   }
-  if (p.health <= 0) {
-    p.health = CONFIG.playerHealth; p.wanted = 0;
-    p.x = sim.city.landmarks.garage.x; p.z = sim.city.landmarks.garage.z + 12;
-    if (p.inCar) p.inCar = null;
-    say(sim, 'You got knocked out — woke up at the garage.');
-  }
-}
 
-function updateMissions(sim, dt) {
-  const p = sim.player;
-  const t = missionTarget(sim);
-  const d = dist2(p.x, p.z, t.x, t.z);
-  if (sim.missionIndex === 1) {
-    sim.missionTimer -= dt;
-    if (sim.missionTimer <= 0) {
-      sim.missionTimer = CONFIG.mission2Seconds;
-      say(sim, 'Too slow! The Package run restarts — 90 seconds again.');
+  // --- Bullets ---
+  for (const b of state.bullets) {
+    b.x += b.vx * dt;
+    b.y += b.vy * dt;
+    b.life -= dt;
+    if (city.pointInBuilding(b.x, b.y)) b.life = 0;
+    if (b.from === 'player') {
+      for (const e of state.enemies) {
+        if (e.alive && dist2(b.x, b.y, e.x, e.y) < 22 * 22) {
+          e.hp -= CONFIG.BULLET_DAMAGE;
+          state.stats.hits++;
+          if (e.hp <= 0) e.alive = false;
+          b.life = 0;
+          break;
+        }
+      }
+      for (const cop of state.cops) {
+        if (dist2(b.x, b.y, cop.x, cop.y) < 24 * 24) {
+          addHeat(state, 12);
+          b.life = 0;
+          break;
+        }
+      }
+    } else if (dist2(b.x, b.y, p.x, p.y) < 18 * 18 && p.jumping <= 0) {
+      p.hp -= 12;
+      b.life = 0;
+      if (p.hp <= 0) {
+        getBusted(state);
+        return;
+      }
     }
   }
-  if (sim.missionIndex === 0 && p.inCar && d < 7) { completeMission(sim); return; }
-  if (sim.missionIndex === 1 && d < 7) { completeMission(sim); return; }
-  if (sim.missionIndex === 2 && p.wanted === 0) { completeMission(sim); return; }
-  if (sim.missionIndex === 4 && sim.missionHits >= 3 && d < 7) { completeMission(sim); return; }
+  state.bullets = state.bullets.filter((b) => b.life > 0);
+
+  // --- Enemies shoot back (rooftop) ---
+  for (const e of state.enemies) {
+    if (!e.alive) continue;
+    e.shootTimer -= dt;
+    const d = Math.hypot(p.x - e.x, p.y - e.y);
+    if (e.shootTimer <= 0 && d < 520) {
+      e.shootTimer = 1.6;
+      const a = angleTo(e.x, e.y, p.x, p.y) + (Math.random() - 0.5) * 0.2;
+      state.bullets.push({
+        x: e.x, y: e.y,
+        vx: Math.cos(a) * 520, vy: Math.sin(a) * 520,
+        life: 1.4, from: 'enemy',
+      });
+    }
+  }
+
+  // --- Pickups ---
+  for (const pk of state.pickups) {
+    if (!pk.taken && dist2(p.x, p.y, pk.x, pk.y) < 30 * 30) {
+      pk.taken = true;
+      if (state.mission && state.mission.id === 'the-package' && state.mission.stage === 0) {
+        state.mission.stage = 1;
+        state.missionTimer = CONFIG.PACKAGE_TIME_LIMIT;
+        flash(state, 'Package secured! Deliver it in 90 seconds!', 3);
+      }
+    }
+  }
+
+  // --- Mission objectives ---
+  const m = state.mission;
+  if (m) {
+    state.missionTimer = m.id === 'the-package' && m.stage === 1 ? state.missionTimer - dt : state.missionTimer;
+    if (m.id === 'wheels-up') {
+      if (m.stage === 0 && p.inCar) {
+        m.stage = 1;
+        flash(state, 'Nice wheels. Now drive to the yellow marker.', 3);
+      } else if (m.stage === 1) {
+        const t = missionTarget(state);
+        if (t && dist2(p.x, p.y, t.x, t.y) < 46 * 46) completeMission(state);
+      }
+    } else if (m.id === 'the-package') {
+      if (m.stage === 1) {
+        if (state.missionTimer <= 0) {
+          flash(state, 'Too slow! The package run reset.', 3);
+          startMission(state, state.missionIndex);
+        } else {
+          const t = missionTarget(state);
+          if (t && dist2(p.x, p.y, t.x, t.y) < 46 * 46) completeMission(state);
+        }
+      }
+    } else if (m.id === 'heat-check') {
+      if (m.stage === 0 && state.wanted >= 3) {
+        m.stage = 1;
+        flash(state, '3 stars! Now shake Verde PD — get back to 0.', 3);
+      } else if (m.stage === 1 && state.wanted === 0) {
+        completeMission(state);
+      }
+    } else if (m.id === 'rooftop-rumble') {
+      if (state.enemies.length > 0 && state.enemies.every((e) => !e.alive)) {
+        completeMission(state);
+      }
+    } else if (m.id === 'marlins-due') {
+      const t = missionTarget(state);
+      if (t && dist2(p.x, p.y, t.x, t.y) < 50 * 50) completeMission(state);
+    }
+  }
+
+  // Player death by any other means also means busted.
+  if (p.hp <= 0 && state.status === 'playing') {
+    getBusted(state);
+  }
 }
 
-export function updateSim(sim, input, dt, audio) {
-  if (sim.paused || !sim.started) return;
-  sim.time += dt;
-  const p = sim.player;
-  if (p.inCar) updateDrive(sim, input, dt, audio);
-  else updateFoot(sim, input, dt);
-  updateTraffic(sim, dt);
-  updatePeds(sim, dt);
-  updatePolice(sim, dt, audio);
-  updateRivals(sim, dt);
-  updateMissions(sim, dt);
-  if (audio) audio.setSiren(p.wanted > 0, p.wanted);
-  sim.effects = sim.effects.filter(e => sim.time - e.t < 0.4);
-}
-
-export function saveGame(sim) {
+export function saveGame(state, storage) {
+  const data = {
+    version: 1,
+    cash: state.player.cash,
+    missionIndex: state.missionIndex,
+    hp: state.player.hp,
+    ammo: state.player.ammo,
+    reserve: state.player.reserve,
+    x: state.player.x,
+    y: state.player.y,
+    stats: state.stats,
+  };
   try {
-    localStorage.setItem(CONFIG.saveKey, JSON.stringify({
-      missionIndex: sim.missionIndex, cash: sim.player.cash,
-    }));
-  } catch { /* storage unavailable in some sandboxes */ }
+    storage.setItem(CONFIG.SAVE_KEY, JSON.stringify(data));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
-export function loadSave() {
+export function loadSave(storage) {
   try {
-    const raw = localStorage.getItem(CONFIG.saveKey);
-    return raw ? JSON.parse(raw) : null;
-  } catch { return null; }
+    const raw = storage.getItem(CONFIG.SAVE_KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    if (data.version !== 1) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+export function applySave(state, data) {
+  if (!data) return false;
+  state.player.cash = data.cash;
+  state.player.hp = data.hp;
+  state.player.ammo = data.ammo;
+  state.player.reserve = data.reserve;
+  state.player.x = data.x;
+  state.player.y = data.y;
+  state.stats = { ...state.stats, ...data.stats };
+  startMission(state, Math.min(data.missionIndex, MISSIONS.length - 1));
+  return true;
 }

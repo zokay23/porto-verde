@@ -1,143 +1,211 @@
-// Boot + game loop for Porto Verde.
-// Input, title screen, pause, save, and the per-frame wiring between
-// the sim, the renderer and the audio synth.
-//
-// Round 2: R now goes through sim.reload() (silent when the mag is
-// already full), autosave uses CONFIG.saveIntervalSeconds, the game
-// auto-pauses when the tab is hidden, and menu buttons click audibly.
-import { makeRng } from './random.js';
-import { CONFIG, STORY } from './config.js';
-import { createSim, updateSim, missionTarget, enterCar, exitCar, shoot, punch, reload, saveGame, loadSave, startMission } from './sim.js';
-import { createRenderer } from './render.js';
-import { GameAudio } from './audio.js';
-import { shotName, applyShot, seedFromUrl } from './shots.js';
+// main.js — Porto Verde bootstrap: input, game loop, menus, save/continue,
+// and the ?shot= hook the screenshot tool uses.
 
-const rng = makeRng(seedFromUrl());
-const sim = createSim({ landmarks: { garage: { x: -125, z: -125 }, marlin: { x: 125, z: 125 }, plaza: { x: 0, z: 0 } } }, rng);
-// The renderer builds the real city and replaces sim.city with it.
-const view = createRenderer(sim, rng);
-const audio = new GameAudio();
+import { CONFIG } from './config.js';
+import { createGame, update, shoot, punch, reload, tryEnterCar, saveGame, loadSave, applySave, getBusted } from './sim.js';
+import { drawScreen } from './render.js';
+import { createAudio } from './audio.js';
+import { applyShot } from './shots.js';
 
-const input = {
-  forward: false, back: false, left: false, right: false, run: false, jump: false,
-  camYaw: Math.PI, camPitch: 0,
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const audio = createAudio();
+
+const state = createGame(CONFIG.CITY_SEED);
+const input = { up: false, down: false, left: false, right: false, run: false, jump: false };
+
+const VW = 1280;
+const VH = 720;
+canvas.width = VW;
+canvas.height = VH;
+
+function resize() {
+  const scale = Math.min(window.innerWidth / VW, window.innerHeight / VH);
+  canvas.style.width = VW * scale + 'px';
+  canvas.style.height = VH * scale + 'px';
+}
+window.addEventListener('resize', resize);
+resize();
+
+const overlay = document.getElementById('overlay');
+const overlayTitle = document.getElementById('overlay-title');
+const overlayText = document.getElementById('overlay-text');
+const btnNew = document.getElementById('btn-new');
+const btnContinue = document.getElementById('btn-continue');
+const btnResume = document.getElementById('btn-resume');
+
+function showOverlay(title, text, buttons) {
+  overlayTitle.textContent = title;
+  overlayText.textContent = text;
+  overlay.classList.remove('hidden');
+  btnNew.classList.toggle('hidden', !buttons.includes('new'));
+  btnContinue.classList.toggle('hidden', !buttons.includes('continue'));
+  btnResume.classList.toggle('hidden', !buttons.includes('resume'));
+}
+
+function hideOverlay() {
+  overlay.classList.add('hidden');
+}
+
+function showTitle() {
+  state.status = 'title';
+  const save = loadSave(window.localStorage);
+  const sub = save
+    ? 'Cash $' + save.cash + ' · Mission ' + (save.missionIndex + 1) + '/5 · Dante "D" Marlow is back on the streets of Porto Verde.'
+    : 'Dante "D" Marlow is back on the streets of Porto Verde. Five jobs. One city. No brakes.';
+  showOverlay('PORTO VERDE', sub, save ? ['new', 'continue'] : ['new']);
+}
+
+btnNew.addEventListener('click', () => {
+  audio.unlock();
+  const fresh = createGame(CONFIG.CITY_SEED);
+  Object.assign(state, fresh);
+  state.status = 'playing';
+  hideOverlay();
+});
+
+btnContinue.addEventListener('click', () => {
+  audio.unlock();
+  const save = loadSave(window.localStorage);
+  if (save) applySave(state, save);
+  state.status = 'playing';
+  hideOverlay();
+});
+
+btnResume.addEventListener('click', () => {
+  state.status = 'playing';
+  hideOverlay();
+});
+
+const KEYMAP = {
+  KeyW: 'up', ArrowUp: 'up',
+  KeyS: 'down', ArrowDown: 'down',
+  KeyA: 'left', ArrowLeft: 'left',
+  KeyD: 'right', ArrowRight: 'right',
+  ShiftLeft: 'run', ShiftRight: 'run',
+  Space: 'jump',
 };
-let dragging = false, lastX = 0, lastY = 0;
-
-const titleEl = document.getElementById('title');
-const titleText = document.getElementById('title-text');
-const startBtn = document.getElementById('start-btn');
-const continueBtn = document.getElementById('continue-btn');
-const pauseEl = document.getElementById('pause');
-
-function refreshTitle() {
-  const save = loadSave();
-  titleText.innerHTML = `<b>${STORY.city}</b> — ${STORY.hero}<br>${STORY.intro}<br><br>` +
-    `WASD drive / walk &nbsp;•&nbsp; E steal car &nbsp;•&nbsp; Click shoot &nbsp;•&nbsp; F punch &nbsp;•&nbsp; R reload &nbsp;•&nbsp; P pause<br>` +
-    (save ? `Save found: mission ${save.missionIndex + 1}, $${save.cash}.` : 'No save yet — a new week starts tonight.');
-  continueBtn.style.display = save ? 'inline-block' : 'none';
-}
-
-function beginGame(fromSave) {
-  audio.ensure();
-  audio.uiClick();
-  if (fromSave) {
-    const save = loadSave();
-    if (save) {
-      sim.player.cash = save.cash;
-      startMission(sim, Math.min(save.missionIndex, 4));
-    }
-  }
-  sim.started = true;
-  titleEl.style.display = 'none';
-  pauseEl.style.display = 'none';
-}
-
-startBtn.addEventListener('click', () => beginGame(false));
-continueBtn.addEventListener('click', () => beginGame(true));
-
-function setPaused(paused) {
-  if (!sim.started) return;
-  sim.paused = paused;
-  pauseEl.style.display = paused ? 'block' : 'none';
-}
 
 window.addEventListener('keydown', (e) => {
-  if (e.repeat) return;
-  const k = e.key.toLowerCase();
-  if (k === 'w' || e.key === 'ArrowUp') input.forward = true;
-  if (k === 's' || e.key === 'ArrowDown') input.back = true;
-  if (k === 'a' || e.key === 'ArrowLeft') input.left = true;
-  if (k === 'd' || e.key === 'ArrowRight') input.right = true;
-  if (k === 'shift') input.run = true;
-  if (k === ' ') { input.jump = true; e.preventDefault(); }
-  if (k === 'e' && sim.started && !sim.paused) {
-    if (sim.player.inCar) exitCar(sim); else enterCar(sim, audio);
+  if (e.code === 'KeyP') {
+    if (state.status === 'playing') {
+      state.status = 'paused';
+      showOverlay('PAUSED', 'Take a breath, D. The city waits.', ['resume']);
+    } else if (state.status === 'paused') {
+      state.status = 'playing';
+      hideOverlay();
+    }
+    return;
   }
-  if (k === 'f' && sim.started && !sim.paused && !sim.player.inCar) punch(sim, audio);
-  if (k === 'r' && sim.started) reload(sim, audio);
-  if (k === 'p' && sim.started) setPaused(!sim.paused);
-  if (k === 'm') audio.toggleMute();
-});
-window.addEventListener('keyup', (e) => {
-  const k = e.key.toLowerCase();
-  if (k === 'w' || e.key === 'ArrowUp') input.forward = false;
-  if (k === 's' || e.key === 'ArrowDown') input.back = false;
-  if (k === 'a' || e.key === 'ArrowLeft') input.left = false;
-  if (k === 'd' || e.key === 'ArrowRight') input.right = false;
-  if (k === 'shift') input.run = false;
-  if (k === ' ') input.jump = false;
-});
-window.addEventListener('mousedown', (e) => {
-  if (!sim.started || sim.paused) return;
-  if (e.target.id === 'hud' || e.target.id === 'game3d') {
-    if (e.button === 0 && !sim.player.inCar) shoot(sim, audio);
-    dragging = true; lastX = e.clientX; lastY = e.clientY;
+  if (e.code === 'KeyM') {
+    audio.toggleMute();
+    return;
   }
-});
-window.addEventListener('mouseup', () => { dragging = false; });
-window.addEventListener('mousemove', (e) => {
-  if (!dragging) return;
-  input.camYaw -= (e.clientX - lastX) * 0.005;
-  lastX = e.clientX; lastY = e.clientY;
-});
-window.addEventListener('resize', () => view.resize());
-// Switching tabs mid-chase used to leave the sim running unseen;
-// pause instead so the player is never busted while away.
-document.addEventListener('visibilitychange', () => {
-  if (document.hidden && sim.started && !sim.paused) setPaused(true);
+  if (state.status !== 'playing') return;
+  const k = KEYMAP[e.code];
+  if (k) {
+    input[k] = true;
+    e.preventDefault();
+  }
+  if (e.code === 'KeyE') {
+    const r = tryEnterCar(state);
+    if (r === 'enter') audio.engine();
+  }
+  if (e.code === 'KeyF') {
+    if (punch(state)) audio.punch();
+  }
+  if (e.code === 'KeyR') {
+    if (reload(state)) audio.reload();
+  }
 });
 
-// Screenshot mode: stage the scene, hide the title, and hold the sim
-// still so the render is exactly the staged moment.
-const shot = shotName();
-if (shot) {
-  applyShot(sim, shot);
-  // Aim the chase camera across the staged scene, not into a wall.
-  input.camYaw = shot === 'action' ? Math.PI + 0.25
-    : shot === 'drive' ? Math.PI / 2 + 0.4
-    : shot === 'mission' ? Math.PI / 2
-    : Math.PI;
-  titleEl.style.display = 'none';
-  document.body.classList.add('shot');
+window.addEventListener('keyup', (e) => {
+  const k = KEYMAP[e.code];
+  if (k) input[k] = false;
+});
+
+canvas.addEventListener('mousedown', (e) => {
+  audio.unlock();
+  if (state.status !== 'playing' || state.player.inCar) return;
+  aimAt(e);
+  if (shoot(state)) audio.shot();
+});
+canvas.addEventListener('mousemove', (e) => {
+  if (state.status === 'playing' && !state.player.inCar) aimAt(e);
+});
+
+function aimAt(e) {
+  const rect = canvas.getBoundingClientRect();
+  const sx = (e.clientX - rect.left) * (VW / rect.width);
+  const sy = (e.clientY - rect.top) * (VH / rect.height);
+  const p = state.player;
+  // Aim from the centre of the screen toward the cursor.
+  p.angle = Math.atan2(sy - VH / 2, sx - VW / 2);
 }
 
-// Expose the live state for play-tests and debugging.
-window.__porto = { sim, input, audio, view };
-
 let last = performance.now();
+let saveTimer = 0;
+let sirenOn = false;
+
 function loop(now) {
-  const dt = Math.min(0.05, (now - last) / 1000);
+  const dt = Math.min((now - last) / 1000, 0.05);
   last = now;
-  sim._target = sim.mission ? missionTarget(sim) : null;
-  if (sim.started && !sim.paused && !sim.shotMode) {
-    updateSim(sim, input, dt, audio);
-    const interval = CONFIG.saveIntervalSeconds;
-    if (Math.floor(sim.time / interval) !== Math.floor((sim.time - dt) / interval)) saveGame(sim);
+
+  if (state.status === 'playing') {
+    update(state, input, dt);
+    // Siren while wanted.
+    if (state.wanted > 0 && !sirenOn) {
+      audio.startSiren();
+      sirenOn = true;
+    } else if (state.wanted === 0 && sirenOn) {
+      audio.stopSiren();
+      sirenOn = false;
+    }
+    // Autosave every 10 seconds of play.
+    saveTimer += dt;
+    if (saveTimer > 10) {
+      saveTimer = 0;
+      saveGame(state, window.localStorage);
+    }
+    if (state.status === 'busted') {
+      audio.stopSiren();
+      sirenOn = false;
+      audio.busted();
+      showOverlay('BUSTED!', 'Verde PD took 10% of your cash. You wake up at Verde General.', ['resume']);
+    } else if (state.status === 'won') {
+      audio.win();
+      saveGame(state, window.localStorage);
+      showOverlay('PORTO VERDE IS YOURS', 'All five jobs done. The Marlin is paid. Dante owns the night.', ['new']);
+    }
+  } else if (state.status === 'busted' && state.bustedTimer > 0) {
+    state.bustedTimer -= dt;
+    if (state.bustedTimer <= 0) {
+      state.status = 'playing';
+      hideOverlay();
+    }
   }
-  view.frame(input, dt);
+
+  ctx.clearRect(0, 0, VW, VH);
+  if (state.status === 'title') {
+    drawScreen(ctx, state, VW, VH);
+  } else {
+    drawScreen(ctx, state, VW, VH);
+  }
   requestAnimationFrame(loop);
 }
 
-refreshTitle();
+// Screenshot mode: ?shot=action|drive|mission|chase stages a scene and
+// signals readiness for the screenshot tool.
+const params = new URLSearchParams(window.location.search);
+const shot = params.get('shot');
+if (shot) {
+  applyShot(state, shot);
+  state.status = 'playing';
+  hideOverlay();
+  window.__shotReady = true;
+} else {
+  showTitle();
+}
+
+window.__portoVerde = { state, audio, saveGame, getBusted };
 requestAnimationFrame(loop);
